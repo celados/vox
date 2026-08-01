@@ -1,6 +1,8 @@
 package run
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/celados/vox/internal/dashscope"
@@ -10,8 +12,8 @@ func TestSIDIsStableAndArgSensitive(t *testing.T) {
 	audio := []byte("fake audio bytes")
 	base := Args{Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}}
 
-	first := SID(audio, base)
-	if first != SID(audio, base) {
+	first := SID(Digest(audio, base))
+	if first != SID(Digest(audio, base)) {
 		t.Fatal("sid is not stable for identical input")
 	}
 	if len(first) != sidLength {
@@ -22,16 +24,17 @@ func TestSIDIsStableAndArgSensitive(t *testing.T) {
 	variants := map[string]Args{
 		"model":   {Model: dashscope.ModelQwenAudioASRFlash, Lang: []string{"zh"}},
 		"lang":    {Model: dashscope.ModelFunASRFlash, Lang: []string{"en"}},
-		"vocab":   {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Vocab: "meeting@abcd1234"},
+		"vocab":   {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Vocab: "abcd1234"},
 		"context": {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Context: []string{"DashScope"}},
+		"format":  {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Format: "mp3"},
 	}
 	for name, args := range variants {
-		if SID(audio, args) == first {
+		if SID(Digest(audio, args)) == first {
 			t.Errorf("changing %s did not change the sid", name)
 		}
 	}
 
-	if SID([]byte("different audio"), base) == first {
+	if SID(Digest([]byte("different audio"), base)) == first {
 		t.Error("changing the audio did not change the sid")
 	}
 }
@@ -70,7 +73,7 @@ func TestPreviewTruncatesOnRunes(t *testing.T) {
 func TestResolveRejectsAmbiguousPrefix(t *testing.T) {
 	store := &Store{dir: t.TempDir()}
 	for _, sid := range []string{"abc111111111", "abc222222222"} {
-		if err := store.saveEmpty(sid); err != nil {
+		if err := os.MkdirAll(store.Dir(sid), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,5 +86,81 @@ func TestResolveRejectsAmbiguousPrefix(t *testing.T) {
 	}
 	if _, err := store.Resolve("zzz"); err == nil {
 		t.Fatal("a missing prefix must not resolve")
+	}
+}
+
+// Regression: Resolve feeds os.RemoveAll. Before validation, `session rm ..`
+// resolved to ~/.vox and `../..` to the home directory.
+func TestResolveRejectsPathTraversal(t *testing.T) {
+	home := t.TempDir()
+	store := NewStore(home)
+	if err := os.MkdirAll(store.dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(home, "config.json")
+	if err := os.WriteFile(sentinel, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, prefix := range []string{"..", "../..", "../../..", "/etc", "a/b", ".", "ABCDEF", "zzz"} {
+		if _, err := store.Resolve(prefix); err == nil {
+			t.Errorf("Resolve(%q) must not resolve", prefix)
+		}
+	}
+	if _, err := os.Stat(sentinel); err != nil {
+		t.Fatalf("sentinel outside runs/ was disturbed: %v", err)
+	}
+}
+
+// A truncated sid could in principle collide. The full digest is what decides a
+// cache hit, so a collision degrades to a miss instead of returning the wrong
+// transcript.
+func TestLoadRejectsDigestMismatch(t *testing.T) {
+	store := NewStore(t.TempDir())
+	rec := &Record{
+		Digest: "digest-of-input-A",
+		Meta:   Meta{SID: "aaaaaaaaaaaa"},
+		Result: &dashscope.ASRResult{Text: "transcript A"},
+	}
+	if err := store.Save(rec, []byte("audio"), "wav"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Load("aaaaaaaaaaaa", "digest-of-input-B"); err == nil {
+		t.Error("a different input must not be served from a colliding sid")
+	}
+	got, err := store.Load("aaaaaaaaaaaa", "digest-of-input-A")
+	if err != nil {
+		t.Fatalf("matching digest must load: %v", err)
+	}
+	if got.Result.Text != "transcript A" {
+		t.Errorf("text = %q", got.Result.Text)
+	}
+}
+
+func TestSaveIsAtomic(t *testing.T) {
+	store := NewStore(t.TempDir())
+	rec := &Record{Digest: "d", Meta: Meta{SID: "bbbbbbbbbbbb"}, Result: &dashscope.ASRResult{Text: "x"}}
+	if err := store.Save(rec, []byte("audio"), "wav"); err != nil {
+		t.Fatal(err)
+	}
+
+	// No staging directory may survive, and none may show up in the index.
+	metas, err := store.List("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 1 || metas[0].SID != "bbbbbbbbbbbb" {
+		t.Fatalf("index = %+v", metas)
+	}
+}
+
+func TestListReturnsEmptySliceNotNil(t *testing.T) {
+	metas, err := NewStore(t.TempDir()).List("", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metas == nil {
+		t.Error("an empty index must marshal as [], not null")
 	}
 }

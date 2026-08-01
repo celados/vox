@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,48 +49,62 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	client := dashscope.NewClient(apiKey)
-	args := run.Args{Model: c.Model, Lang: c.Lang, Context: c.Context}
-
-	// The vocabulary is synced before hashing: its resolved content is part of
-	// the run identity, so editing the YAML yields a new sid on the next call.
-	var vocabularyID string
-	if c.Vocab != "" {
-		v, err := vocab.Load(cfg.Dir, c.Vocab)
-		if err != nil {
-			return err
-		}
-		result, err := vocab.Sync(client, cfg.Dir, v, c.Model, false)
-		if err != nil {
-			return err
-		}
-		for _, w := range result.Warnings {
-			ui.Warn("%s", w)
-		}
-		if result.Action != "reused" {
-			ui.Info("%s %s %s", ui.Dim("vocab"), ui.Key(c.Vocab), ui.Dim(result.Action))
-		}
-		vocabularyID = result.VocabularyID
-		args.Vocab = c.Vocab + "@" + result.ContentHash
-	}
 
 	audioData, format, source, err := c.acquire()
 	if err != nil {
 		return err
 	}
 
-	durationSec := audio.Duration(source, audioData)
+	durationSec, err := audio.Duration(source, audioData)
+	if err != nil {
+		ui.Warn("duration unknown (%v); only the size limit is enforced", err)
+	}
 	if err := checkLimits(len(audioData), durationSec); err != nil {
 		return err
 	}
 
+	// The vocabulary is resolved locally first: its content hash is part of the
+	// run identity, but a stored run must not cost a remote round-trip, so the
+	// server-side list is only reconciled on a miss.
+	var vocabulary *vocab.Vocabulary
+	args := run.Args{
+		Model:   c.Model,
+		Format:  format,
+		Lang:    normalize(c.Lang),
+		Context: normalize(c.Context),
+	}
+	if c.Vocab != "" {
+		if vocabulary, err = vocab.Load(cfg.Dir, c.Vocab); err != nil {
+			return err
+		}
+		words, warnings := vocabulary.Resolve(c.Model)
+		for _, w := range warnings {
+			ui.Warn("%s", w)
+		}
+		args.Vocab = vocab.ContentHash(words)
+	}
+
 	store := run.NewStore(cfg.Dir)
-	sid := run.SID(audioData, args)
+	digest := run.Digest(audioData, args)
+	sid := run.SID(digest)
 
 	if !c.Refresh {
-		if rec, err := store.Load(sid); err == nil {
+		if rec, err := store.Load(sid, digest); err == nil {
 			ui.Info("%s", ui.Dim("stored"))
 			return printEnvelope(rec)
 		}
+	}
+
+	var vocabularyID string
+	if vocabulary != nil {
+		result, err := vocab.Sync(client, cfg.Dir, vocabulary, c.Model, false)
+		if err != nil {
+			return err
+		}
+		if result.Action != "reused" {
+			ui.Info("%s %s %s", ui.Dim("vocab"), ui.Key(c.Vocab), ui.Dim(result.Action))
+		}
+		vocabularyID = result.VocabularyID
 	}
 
 	t0 := time.Now()
@@ -99,9 +114,9 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 		Model:         c.Model,
 		Format:        format,
 		SampleRate:    sampleRateFor(c.File),
-		Context:       c.Context,
+		Context:       args.Context,
 		VocabularyID:  vocabularyID,
-		LanguageHints: c.Lang,
+		LanguageHints: args.Lang,
 	})
 	if err != nil {
 		return voxerr.New(voxerr.APIError, "%s", err.Error())
@@ -111,13 +126,18 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	if durationSec == 0 {
 		durationSec = result.DurationSec
 	}
+	vocabLabel := ""
+	if vocabulary != nil {
+		vocabLabel = c.Vocab + "@" + args.Vocab
+	}
 	rec := &run.Record{
+		Digest: digest,
 		Meta: run.Meta{
 			SID:     sid,
 			Source:  run.Tilde(source),
 			Model:   c.Model,
-			Vocab:   args.Vocab,
-			Lang:    c.Lang,
+			Vocab:   vocabLabel,
+			Lang:    args.Lang,
 			Created: time.Now().UTC(),
 			Path:    run.Tilde(store.Dir(sid)),
 			Size:    run.Measure(result, durationSec),
@@ -139,10 +159,13 @@ func (c *HearCmd) acquire() (data []byte, format, source string, err error) {
 			return nil, "", "", voxerr.New(voxerr.AudioUnsupported, "cannot read %s: %v", c.File, err)
 		}
 		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(c.File)), ".")
-		if format == "" {
+		// A whitelist, not just a non-empty check: the extension becomes the
+		// declared format in the request, so `notes.txt` would otherwise be
+		// uploaded as audio/txt and fail as an opaque server error.
+		if !supportedFormats[format] {
 			return nil, "", "", voxerr.New(voxerr.AudioUnsupported,
-				"cannot infer the audio format of %s", c.File).
-				WithHint("rename the file with its extension, e.g. .wav or .m4a")
+				"%s is not a supported audio format", displayFormat(format, c.File)).
+				WithHint("supported: %s", strings.Join(formatList(), ", "))
 		}
 		abs, _ := filepath.Abs(c.File)
 		return data, format, abs, nil
@@ -163,8 +186,43 @@ func (c *HearCmd) acquire() (data []byte, format, source string, err error) {
 	return wrapPCMAsWAVWithRate(pcm, asrSampleRate), "wav", "mic", nil
 }
 
+// supportedFormats are the containers the recognition API accepts.
+var supportedFormats = map[string]bool{
+	"wav": true, "mp3": true, "opus": true, "ogg": true,
+	"m4a": true, "aac": true, "flac": true, "amr": true, "wma": true,
+}
+
+func formatList() []string {
+	list := make([]string, 0, len(supportedFormats))
+	for f := range supportedFormats {
+		list = append(list, f)
+	}
+	sort.Strings(list)
+	return list
+}
+
+func displayFormat(format, file string) string {
+	if format == "" {
+		return filepath.Base(file) + " (no extension)"
+	}
+	return "." + format
+}
+
+// normalize drops empty entries so a caller passing `-c ""` produces the same
+// run identity as one passing nothing — the API ignores them either way.
+func normalize(values []string) []string {
+	var out []string
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 // checkLimits rejects oversized audio locally. The server would reject it too,
 // but only after the upload — and its message says nothing about what to do.
+// durationSec of 0 means unknown, in which case only the size cap applies.
 func checkLimits(bytes, durationSec int) error {
 	if bytes > dashscope.MaxAudioBytes {
 		return voxerr.New(voxerr.AudioTooLarge, "audio is %.1fMB, over the %dMB request limit",

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/celados/vox/internal/dashscope"
+	"github.com/celados/vox/internal/run"
+	"gopkg.in/yaml.v3"
 )
 
 // word builds a word whose timing is caller-controlled, in milliseconds.
@@ -76,5 +78,97 @@ func TestRenderVTTHeader(t *testing.T) {
 	out := renderVTT([]Cue{{Index: 1, End: time.Second, Text: "x"}})
 	if !strings.HasPrefix(out, "WEBVTT\n\n") {
 		t.Errorf("vtt output = %q", out)
+	}
+}
+
+// Regression: a run with text but no word timings used to render an empty
+// subtitle file and a markdown document containing only frontmatter.
+func TestRendersWithoutWordTimings(t *testing.T) {
+	rec := &run.Record{
+		Meta:   run.Meta{SID: "abc", Size: run.Size{Duration: 12}},
+		Result: &dashscope.ASRResult{Text: "整段文本，没有词级时间戳。"},
+	}
+
+	srt, err := Render(rec, "srt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(srt, "整段文本") {
+		t.Errorf("srt lost the transcript: %q", srt)
+	}
+	if !strings.Contains(srt, "00:00:12,000") {
+		t.Errorf("srt must span the run duration: %q", srt)
+	}
+
+	md, err := Render(rec, "md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(md, "整段文本") {
+		t.Errorf("markdown lost the transcript: %q", md)
+	}
+}
+
+// Regression: out-of-order or zero-length word timings produced cues whose end
+// preceded their begin, which players reject.
+func TestSegmentRepairsTimeline(t *testing.T) {
+	cues := Segment([]dashscope.ASRWord{
+		word("后", "。", 1000, 1500),
+		word("先", "。", 500, 700), // arrives late but claims an earlier start
+		word("零", "。", 2000, 2000),
+	})
+	prev := time.Duration(-1)
+	for _, cue := range cues {
+		if cue.End < cue.Begin {
+			t.Errorf("cue %d: end %v precedes begin %v", cue.Index, cue.End, cue.Begin)
+		}
+		if cue.End == cue.Begin {
+			t.Errorf("cue %d is zero-length", cue.Index)
+		}
+		if cue.Begin < prev {
+			t.Errorf("cue %d starts before the previous cue ended", cue.Index)
+		}
+		prev = cue.End
+	}
+}
+
+// Regression: the budget was checked after appending, so one long word could
+// carry a cue far past the limits.
+func TestSegmentKeepsCuesWithinBudget(t *testing.T) {
+	var words []dashscope.ASRWord
+	for i := 0; i < 40; i++ {
+		words = append(words, word("字", "", i*100, i*100+100))
+	}
+	for _, cue := range Segment(words) {
+		if runes := len([]rune(cue.Text)); runes > maxCueRunes {
+			t.Errorf("cue %d holds %d runes, over the %d budget", cue.Index, runes, maxCueRunes)
+		}
+	}
+}
+
+// A YAML-significant character in the source path must not corrupt the
+// frontmatter of an exported markdown transcript.
+func TestMarkdownFrontmatterIsValidYAML(t *testing.T) {
+	rec := &run.Record{
+		Meta:   run.Meta{SID: "abc", Source: "/tmp/a: b #1.wav", Model: "m"},
+		Result: &dashscope.ASRResult{Text: "x。"},
+	}
+	md := renderMarkdown(rec)
+
+	_, body, found := strings.Cut(strings.TrimPrefix(md, "---\n"), "---\n")
+	if !found {
+		t.Fatalf("no frontmatter delimiters: %q", md)
+	}
+	head, _, _ := strings.Cut(strings.TrimPrefix(md, "---\n"), "---\n")
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal([]byte(head), &parsed); err != nil {
+		t.Fatalf("frontmatter is not valid YAML: %v\n%s", err, head)
+	}
+	if parsed["source"] != "/tmp/a: b #1.wav" {
+		t.Errorf("source round-tripped as %v", parsed["source"])
+	}
+	if !strings.Contains(body, "x。") {
+		t.Errorf("body = %q", body)
 	}
 }

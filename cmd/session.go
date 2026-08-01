@@ -30,8 +30,10 @@ func (c *SessionLsCmd) Run(cfg *config.AppConfig) error {
 	}
 	if len(metas) == 0 {
 		ui.Warn("No runs stored")
-		return nil
 	}
+	// Emitted even when empty: stdout always carries the artifact, so a caller
+	// parses `[]` rather than distinguishing "no runs" from "command produced
+	// nothing".
 	return emitYAML(metas)
 }
 
@@ -45,6 +47,12 @@ type SessionRmCmd struct {
 func (c *SessionRmCmd) Run(cfg *config.AppConfig) error {
 	store := run.NewStore(cfg.Dir)
 
+	// Refuse rather than pick: `rm abc --all` reads as "delete abc" to a caller
+	// who typo'd the flag, and deleting everything instead is unrecoverable.
+	if c.All && c.SID != "" {
+		return voxerr.New(voxerr.InvalidUsage, "--all cannot be combined with a run id").
+			WithHint("vox session rm %s  ·  vox session rm --all", c.SID)
+	}
 	if c.All {
 		if err := store.RemoveAll(); err != nil {
 			return err
@@ -53,7 +61,7 @@ func (c *SessionRmCmd) Run(cfg *config.AppConfig) error {
 		return nil
 	}
 	if c.SID == "" {
-		return voxerr.New(voxerr.SessionNotFound, "no run id given").
+		return voxerr.New(voxerr.InvalidUsage, "no run id given").
 			WithHint("vox session rm <sid>  ·  vox session rm --all")
 	}
 
@@ -83,5 +91,8 @@ func writeOut(path, content string) error {
 		fmt.Print(content)
 		return nil
 	}
-	return os.WriteFile(path, []byte(content), 0644)
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return voxerr.New(voxerr.IOError, "cannot write %s: %v", path, err)
+	}
+	return nil
 }

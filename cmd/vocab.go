@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/celados/vox/internal/config"
 	"github.com/celados/vox/internal/dashscope"
 	"github.com/celados/vox/internal/ui"
@@ -25,17 +27,27 @@ type vocabEntry struct {
 	Words  int               `yaml:"words"`
 	Lang   string            `yaml:"lang,omitempty"`
 	Synced map[string]string `yaml:"synced,omitempty"`
+	// Error reports a file that exists but cannot be used, so a broken
+	// vocabulary is visible in the index rather than silently absent.
+	Error string `yaml:"error,omitempty"`
+}
+
+// vocabIndex is the whole artifact: the quota belongs in it, not on stderr,
+// because deciding whether another vocabulary fits is exactly what a caller
+// reads this for.
+type vocabIndex struct {
+	Quota        string       `yaml:"quota"`
+	Vocabularies []vocabEntry `yaml:"vocabularies"`
 }
 
 func (c *VocabLsCmd) Run(cfg *config.AppConfig) error {
-	vocabularies, err := vocab.List(cfg.Dir)
+	names, err := vocab.Names(cfg.Dir)
 	if err != nil {
 		return err
 	}
-	if len(vocabularies) == 0 {
+	if len(names) == 0 {
 		ui.Warn("No vocabularies")
 		ui.Info("  write %s", ui.Key(vocab.Tilde(vocab.Path(cfg.Dir, "<name>"))))
-		return nil
 	}
 
 	index, err := vocab.LoadIndex(cfg.Dir)
@@ -43,24 +55,35 @@ func (c *VocabLsCmd) Run(cfg *config.AppConfig) error {
 		return err
 	}
 
-	entries := make([]vocabEntry, 0, len(vocabularies))
-	for _, v := range vocabularies {
-		entries = append(entries, vocabEntry{
-			Name:   v.Name,
-			Path:   vocab.Tilde(v.Path),
-			Words:  len(v.File.Words),
-			Lang:   v.File.Lang,
-			Synced: vocab.Describe(index, v.Name),
-		})
+	entries := make([]vocabEntry, 0, len(names))
+	for _, name := range names {
+		entry := vocabEntry{Name: name, Path: vocab.Tilde(vocab.Path(cfg.Dir, name))}
+		v, err := vocab.Load(cfg.Dir, name)
+		if err != nil {
+			entry.Error = err.Error()
+		} else {
+			entry.Words = len(v.File.Words)
+			entry.Lang = v.File.Lang
+			entry.Synced = vocab.Describe(index, name)
+		}
+		entries = append(entries, entry)
 	}
 
-	// The account cap is shared across models, so surface usage next to the list.
-	if key, err := cfg.RequireAPIKey(); err == nil {
-		if remote, err := dashscope.NewClient(key).ListVocabularies(); err == nil {
-			ui.Info("%s %d/%d", ui.Dim("remote lists"), len(remote), dashscope.VocabularyQuota)
-		}
+	return emitYAML(vocabIndex{Quota: quotaUsage(cfg), Vocabularies: entries})
+}
+
+// quotaUsage reports the shared account cap, or why it is unknown — an
+// unreachable API must not silently look like "plenty of room".
+func quotaUsage(cfg *config.AppConfig) string {
+	key, err := cfg.RequireAPIKey()
+	if err != nil {
+		return "unknown (not authenticated)"
 	}
-	return emitYAML(entries)
+	remote, err := dashscope.NewClient(key).ListVocabularies()
+	if err != nil {
+		return "unknown (" + err.Error() + ")"
+	}
+	return fmt.Sprintf("%d/%d", len(remote), dashscope.VocabularyQuota)
 }
 
 // --- sync ---

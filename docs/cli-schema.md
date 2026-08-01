@@ -6,7 +6,7 @@ description: >
   agent-facing STT/TTS tool. Runs are content-addressed; everything after
   transcription is an operation on a stored run.
 status: draft # draft | accepted | superseded
-version: 0.2
+version: 0.3
 generated: { by: claude/opus-5, at: 2026-08-01T00:00:00Z }
 ---
 
@@ -200,12 +200,21 @@ message: vocabulary "meeting" is synced for qwen-audio-3.0-asr-flash, not fun-as
 hint: vox vocab sync meeting --model fun-asr-flash-2026-06-15
 ```
 
-Exit codes: `0` success · `1` usage/validation · `2` API failure · `3` not found.
+Exit codes: `0` success · `1` usage/validation · `2` API or local I/O failure ·
+`3` not found.
 
-Codes are a closed set so an agent can branch without parsing prose. Initial
-set: `not_authenticated`, `audio_too_large`, `audio_unsupported`,
+Codes are a closed set so an agent can branch without parsing prose:
+`invalid_usage`, `not_authenticated`, `audio_too_large`, `audio_unsupported`,
 `vocab_not_found`, `vocab_quota_exceeded`, `vocab_model_mismatch`,
-`session_not_found`, `session_ambiguous`, `api_error`.
+`vocab_index_corrupt`, `session_not_found`, `session_ambiguous`, `io_error`,
+`api_error`.
+
+Argument parsing errors go through the same renderer as everything else: an
+unknown flag is `invalid_usage`, not a wall of usage text.
+
+An index command emits its artifact even when the collection is empty — `[]`
+rather than nothing, so a caller never has to distinguish "no results" from "no
+output".
 
 ## Data model
 
@@ -224,14 +233,24 @@ set: `not_authenticated`, `audio_too_large`, `audio_unsupported`,
 ```
 
 `sid` is the first 12 hex of `sha256(audio_bytes ‖ canonical(args))`, where
-`args` is only what changes the transcript: `model`, `lang`, `context`, and the
-vocabulary's **content hash** — not its name. Editing a vocabulary YAML
-therefore produces a new `sid` on the next run, with no cache-busting flag.
+`args` is only what changes the transcript: `model`, `format`, `lang`, `context`,
+and the vocabulary's **content hash** — not its name. Editing a vocabulary YAML
+therefore produces a new `sid` on the next run, with no cache-busting flag; two
+vocabularies with identical words do not fork one.
 
 Export format is not part of `args`: presentation never forks a run.
 
-Commands taking a `sid` accept any unique prefix; an ambiguous prefix is
-`session_ambiguous`, not a guess.
+The **full** digest is stored in `run.json` and checked on every cache hit. `sid`
+is a 48-bit display prefix, so a collision must degrade to a miss rather than
+silently serve another input's transcript.
+
+A run is published by renaming a staging directory into place, so a concurrent
+`session ls` or `export` never observes a partially written run.
+
+Commands taking a `sid` accept any unique prefix, validated as hex before it
+reaches the filesystem — the value flows into `os.RemoveAll`, so `..` must never
+survive a path join. An ambiguous prefix is `session_ambiguous`, not a guess, and
+`rm <sid> --all` is refused rather than resolved in either direction.
 
 ## Vocabulary YAML
 
@@ -265,9 +284,22 @@ agent editing a vocabulary should not need to know any model's rules:
 
 Sync is content-hash driven: equal hash is a no-op, changed content calls
 `update_vocabulary` so the `vocabulary_id` survives, missing entries call
-`create_vocabulary` and poll `query_vocabulary` until `status: OK`. A
-`target_model` mismatch fails **silently** server-side, so the adapter refuses
-the call locally instead of trusting the API to complain.
+`create_vocabulary`. Both create and update poll `query_vocabulary` until
+`status: OK`, since a list used while `UNDEPLOYED` has no effect and says so
+nowhere.
+
+A `target_model` mismatch fails **silently** server-side — the recognition
+request succeeds and the hotwords simply do nothing. The stored binding is
+therefore verified against the remote list before use and reported as
+`vocab_model_mismatch`; a list that has vanished is recreated.
+
+`hear` resolves a vocabulary locally, hashes it, and checks the run store
+**before** touching the network. A stored run costs zero API requests even when
+`--vocab` is passed.
+
+The index is written through a temp file and rename. A corrupt index is
+`vocab_index_corrupt`, never an empty one: treating it as empty would make
+`prune` consider nothing claimed and delete every list on the account.
 
 ## Verified behaviour
 
@@ -309,6 +341,16 @@ Sources:
 - **Envelope fold threshold.** Written as 2000 tokens. It only needs to be small
   enough that an agent doing `hear` on an hour of audio does not get 10k tokens
   it did not ask for.
+
+- **Duration probe on non-WAV input.** WAV is parsed inline; everything else
+  needs `ffprobe`. Without it the duration is unknown, and `hear` warns and
+  enforces only the size cap rather than refusing — failing closed would make
+  every mp3 unusable on a machine without ffmpeg.
+
+- **Concurrent `hear` on one input.** Publication is atomic, so the stored run is
+  never inconsistent, but two processes that miss simultaneously both call the
+  API and pay twice. A per-sid lock would close it; not worth the machinery until
+  it happens.
 - **Qwen retirement.** Kept as a valid `--model` value at zero maintenance cost
   now that both models share one code path. Its only exclusive features are
   inline hotwords (deliberately unused) and super hotwords.

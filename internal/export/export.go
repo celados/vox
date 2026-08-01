@@ -12,6 +12,7 @@ import (
 
 	"github.com/celados/vox/internal/dashscope"
 	"github.com/celados/vox/internal/run"
+	"gopkg.in/yaml.v3"
 )
 
 // Cue conventions. Fixed rather than exposed as flags: these are subtitle
@@ -21,6 +22,8 @@ const (
 	maxCueDuration = 6 * time.Second
 	// gapSplit is the inter-word silence that ends a cue even mid-clause.
 	gapSplit = 400 * time.Millisecond
+	// minWordMillis gives a zero-length word enough span to be a valid cue.
+	minWordMillis = 40
 )
 
 // terminators end a cue outright; separators end one only if it is long enough.
@@ -38,6 +41,8 @@ type Cue struct {
 
 // Segment groups words into subtitle cues.
 func Segment(words []dashscope.ASRWord) []Cue {
+	words = sanitize(words)
+
 	var cues []Cue
 	var buf strings.Builder
 	var begin, end time.Duration
@@ -64,6 +69,11 @@ func Segment(words []dashscope.ASRWord) []Cue {
 
 		// A long silence before this word closes the pending cue.
 		if started && wordBegin-end >= gapSplit {
+			flush()
+		}
+		// Close before appending too, so one long word cannot silently blow past
+		// the budget for the words already buffered.
+		if started && (runeCount+len([]rune(w.Text)) > maxCueRunes || wordEnd-begin > maxCueDuration) {
 			flush()
 		}
 		if !started {
@@ -94,6 +104,28 @@ func Segment(words []dashscope.ASRWord) []Cue {
 	return cues
 }
 
+// sanitize makes the timeline monotonic and non-degenerate. Word timings come
+// from the service; a cue whose end precedes its begin produces a subtitle file
+// that players reject outright, so it is repaired here rather than emitted.
+func sanitize(words []dashscope.ASRWord) []dashscope.ASRWord {
+	out := make([]dashscope.ASRWord, 0, len(words))
+	prevEnd := 0
+	for _, w := range words {
+		if strings.TrimSpace(w.Text) == "" && w.Punctuation == "" {
+			continue
+		}
+		if w.BeginTime < prevEnd {
+			w.BeginTime = prevEnd
+		}
+		if w.EndTime <= w.BeginTime {
+			w.EndTime = w.BeginTime + minWordMillis
+		}
+		prevEnd = w.EndTime
+		out = append(out, w)
+	}
+	return out
+}
+
 // Render produces the requested format. Formats are the whole contract; adding
 // one here is a surface change.
 func Render(rec *run.Record, format string) (string, error) {
@@ -106,28 +138,77 @@ func Render(rec *run.Record, format string) (string, error) {
 	case "md":
 		return renderMarkdown(rec), nil
 	case "srt":
-		return renderSRT(Segment(rec.Result.Words)), nil
+		return renderSRT(cues(rec)), nil
 	case "vtt":
-		return renderVTT(Segment(rec.Result.Words)), nil
+		return renderVTT(cues(rec)), nil
 	default:
 		return "", fmt.Errorf("unknown format %q", format)
 	}
 }
 
-func renderMarkdown(rec *run.Record) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "---\ntype: Transcript\nsid: %s\nsource: %s\nmodel: %s\n", rec.Meta.SID, rec.Meta.Source, rec.Meta.Model)
-	if rec.Meta.Vocab != "" {
-		fmt.Fprintf(&b, "vocab: %s\n", rec.Meta.Vocab)
+// cues falls back to a single whole-run cue when the service returned text
+// without word timings — an unsegmented subtitle still beats an empty file.
+func cues(rec *run.Record) []Cue {
+	if segmented := Segment(rec.Result.Words); len(segmented) > 0 {
+		return segmented
 	}
-	fmt.Fprintf(&b, "duration: %s\ngenerated: { by: vox, at: %s }\n---\n\n",
-		formatDuration(time.Duration(rec.Meta.Size.Duration)*time.Second),
-		rec.Meta.Created.UTC().Format(time.RFC3339))
+	if strings.TrimSpace(rec.Result.Text) == "" {
+		return nil
+	}
+	return []Cue{{
+		Index: 1,
+		Begin: 0,
+		End:   time.Duration(rec.Meta.Size.Duration) * time.Second,
+		Text:  rec.Result.Text,
+	}}
+}
+
+// frontmatter is marshalled rather than formatted: a source path containing a
+// colon or a hash would otherwise produce a document that is not valid YAML.
+type frontmatter struct {
+	Type      string            `yaml:"type"`
+	SID       string            `yaml:"sid"`
+	Source    string            `yaml:"source"`
+	Model     string            `yaml:"model"`
+	Vocab     string            `yaml:"vocab,omitempty"`
+	Duration  string            `yaml:"duration"`
+	Generated map[string]string `yaml:"generated"`
+}
+
+func renderMarkdown(rec *run.Record) string {
+	head, err := yaml.Marshal(frontmatter{
+		Type:     "Transcript",
+		SID:      rec.Meta.SID,
+		Source:   rec.Meta.Source,
+		Model:    rec.Meta.Model,
+		Vocab:    rec.Meta.Vocab,
+		Duration: formatDuration(time.Duration(rec.Meta.Size.Duration) * time.Second),
+		Generated: map[string]string{
+			"by": "vox",
+			"at": rec.Meta.Created.UTC().Format(time.RFC3339),
+		},
+	})
+	if err != nil {
+		return rec.Result.Text + "\n"
+	}
+
+	var b strings.Builder
+	b.WriteString("---\n")
+	b.Write(head)
+	b.WriteString("---\n\n")
+
+	segmented := Segment(rec.Result.Words)
+	if len(segmented) == 0 {
+		// No word timings: the transcript is still the point of the document.
+		b.WriteString(strings.TrimSpace(rec.Result.Text))
+		b.WriteString("\n")
+		return b.String()
+	}
 
 	// Paragraphs follow the same cue segmentation, merged until a sentence ends,
 	// so prose stays readable instead of one wall of text.
 	var para strings.Builder
-	for _, cue := range Segment(rec.Result.Words) {
+	for _, cue := range segmented {
 		para.WriteString(cue.Text)
 		if strings.ContainsAny(lastRune(cue.Text), terminators) {
 			b.WriteString(para.String())

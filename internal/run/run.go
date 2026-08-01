@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -26,9 +28,10 @@ const sidLength = 12
 // Args is everything that changes the transcript. Presentation choices are
 // deliberately absent: exporting a run a second way must not fork it.
 type Args struct {
-	Model string `yaml:"model" json:"model"`
-	// Vocab is "<name>@<content-hash>" — the content, not just the name, so
-	// editing a vocabulary YAML yields a new sid without a cache-busting flag.
+	Model  string `yaml:"model" json:"model"`
+	Format string `yaml:"format" json:"format"`
+	// Vocab is the resolved content hash, never the vocabulary's name: two files
+	// with identical words must not fork the run, and editing one must.
 	Vocab   string   `yaml:"vocab,omitempty" json:"vocab,omitempty"`
 	Lang    []string `yaml:"lang,omitempty" json:"lang,omitempty"`
 	Context []string `yaml:"context,omitempty" json:"context,omitempty"`
@@ -55,8 +58,12 @@ type Meta struct {
 
 // Record is a run's full content, kept beside the envelope.
 type Record struct {
-	Meta   Meta                 `json:"meta"`
-	Args   Args                 `json:"args"`
+	Meta Meta `json:"meta"`
+	Args Args `json:"args"`
+	// Digest is the untruncated identity. sid is a 48-bit display prefix, so a
+	// cache hit is only trusted after the full digest matches — a collision
+	// degrades to a miss instead of silently returning another file's transcript.
+	Digest string               `json:"digest"`
 	Result *dashscope.ASRResult `json:"result"`
 }
 
@@ -64,19 +71,26 @@ type Store struct{ dir string }
 
 func NewStore(voxDir string) *Store { return &Store{dir: filepath.Join(voxDir, "runs")} }
 
-// SID derives the run id from the audio and the recognition args.
-func SID(audio []byte, args Args) string {
+// Digest is the full identity of a run: the audio plus everything that changes
+// the transcript.
+func Digest(audio []byte, args Args) string {
 	h := sha256.New()
 	h.Write(audio)
 	// A canonical encoding matters: a field reordering must not re-key the run.
 	canonical, _ := json.Marshal(args)
 	h.Write(canonical)
-	return hex.EncodeToString(h.Sum(nil))[:sidLength]
+	return hex.EncodeToString(h.Sum(nil))
 }
+
+// SID is the displayed prefix of the digest.
+func SID(digest string) string { return digest[:sidLength] }
 
 func (s *Store) Dir(sid string) string { return filepath.Join(s.dir, sid) }
 
-func (s *Store) Load(sid string) (*Record, error) {
+// Load returns the run stored under sid only if it is the one identified by
+// digest. Passing an empty digest skips the check, for lookups by id where the
+// caller has no input to compare against.
+func (s *Store) Load(sid, digest string) (*Record, error) {
 	data, err := os.ReadFile(filepath.Join(s.Dir(sid), "run.json"))
 	if err != nil {
 		return nil, err
@@ -85,15 +99,26 @@ func (s *Store) Load(sid string) (*Record, error) {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return nil, err
 	}
+	if digest != "" && rec.Digest != digest {
+		return nil, fmt.Errorf("run %s holds a different input", sid)
+	}
 	return &rec, nil
 }
 
+// Save publishes a run atomically: everything is written to a scratch directory
+// and moved into place in one rename, so a concurrent `session ls` or `export`
+// never observes a half-written run.
 func (s *Store) Save(rec *Record, audio []byte, format string) error {
-	dir := s.Dir(rec.Meta.SID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "audio."+format), audio, 0644); err != nil {
+	staging, err := os.MkdirTemp(s.dir, ".staging-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(staging)
+
+	if err := os.WriteFile(filepath.Join(staging, "audio."+format), audio, 0644); err != nil {
 		return err
 	}
 	// meta.yaml duplicates the envelope so the directory is readable on its own,
@@ -102,19 +127,38 @@ func (s *Store) Save(rec *Record, audio []byte, format string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "meta.yaml"), metaYAML, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(staging, "meta.yaml"), metaYAML, 0644); err != nil {
 		return err
 	}
 	full, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "run.json"), full, 0644)
+	if err := os.WriteFile(filepath.Join(staging, "run.json"), full, 0644); err != nil {
+		return err
+	}
+
+	// A losing racer replaces an identical run, so clearing the target first is
+	// safe: both writers computed the same digest from the same input.
+	final := s.Dir(rec.Meta.SID)
+	if err := os.RemoveAll(final); err != nil {
+		return err
+	}
+	return os.Rename(staging, final)
 }
+
+// sidPattern is the only shape a run directory name can take. Resolve validates
+// against it before touching the filesystem: a prefix reaches os.RemoveAll, so
+// "../.." must never survive as far as a path join.
+var sidPattern = regexp.MustCompile(`^[0-9a-f]{1,` + strconv.Itoa(sidLength) + `}$`)
 
 // Resolve expands a unique sid prefix. An ambiguous prefix is an error, never a
 // guess.
 func (s *Store) Resolve(prefix string) (string, error) {
+	if !sidPattern.MatchString(prefix) {
+		return "", voxerr.New(voxerr.SessionNotFound,
+			"%q is not a run id: expected up to %d hex characters", prefix, sidLength)
+	}
 	if _, err := os.Stat(s.Dir(prefix)); err == nil {
 		return prefix, nil
 	}
@@ -124,7 +168,7 @@ func (s *Store) Resolve(prefix string) (string, error) {
 	}
 	var matches []string
 	for _, e := range entries {
-		if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
+		if e.IsDir() && sidPattern.MatchString(e.Name()) && strings.HasPrefix(e.Name(), prefix) {
 			matches = append(matches, e.Name())
 		}
 	}
@@ -145,14 +189,15 @@ func (s *Store) List(sourceFilter string, limit int) ([]Meta, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return []Meta{}, nil
 		}
 		return nil, err
 	}
 
-	var metas []Meta
+	metas := []Meta{} // never nil: an empty index still has to marshal as []
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Skip in-flight staging directories as well as stray files.
+		if !e.IsDir() || !sidPattern.MatchString(e.Name()) {
 			continue
 		}
 		data, err := os.ReadFile(filepath.Join(s.dir, e.Name(), "meta.yaml"))
@@ -239,5 +284,3 @@ func Preview(text string, runes int) string {
 	}
 	return string(r[:runes]) + "…"
 }
-
-func (m Meta) String() string { return fmt.Sprintf("%s %s", m.SID, m.Source) }

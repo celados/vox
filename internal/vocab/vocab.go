@@ -7,10 +7,12 @@
 package vocab
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -65,14 +67,27 @@ func Load(voxDir, name string) (*Vocabulary, error) {
 		}
 		return nil, err
 	}
+	// Strict decoding: this file is hand- and agent-edited, and a typo like
+	// `word:` for `words:` would otherwise resolve to an empty vocabulary that
+	// silently changes nothing about recognition.
 	var f File
-	if err := yaml.Unmarshal(data, &f); err != nil {
-		return nil, voxerr.New(voxerr.VocabNotFound, "vocabulary %q is not valid YAML: %v", name, err)
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&f); err != nil && err != io.EOF {
+		return nil, voxerr.New(voxerr.VocabNotFound, "vocabulary %q is not valid: %v", name, err).
+			WithHint("check %s", Tilde(path))
+	}
+	if f.DefaultWeight != 0 && !validWeight(f.DefaultWeight) {
+		return nil, voxerr.New(voxerr.VocabNotFound,
+			"vocabulary %q has default_weight %d; expected 1-5", name, f.DefaultWeight).
+			WithHint("check %s", Tilde(path))
 	}
 	return &Vocabulary{Name: name, Path: path, File: f}, nil
 }
 
-func List(voxDir string) ([]*Vocabulary, error) {
+// Names lists every vocabulary file, valid or not. Callers decide how to report
+// an unreadable one; skipping it here would hide a broken source of truth.
+func Names(voxDir string) ([]string, error) {
 	entries, err := os.ReadDir(Dir(voxDir))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -80,19 +95,33 @@ func List(voxDir string) ([]*Vocabulary, error) {
 		}
 		return nil, err
 	}
-	var out []*Vocabulary
+	var names []string
 	for _, e := range entries {
 		name := strings.TrimSuffix(e.Name(), ".yaml")
-		if e.IsDir() || name == e.Name() {
+		// Skip directories, non-YAML files, and the dotfiles vox owns.
+		if e.IsDir() || name == e.Name() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// List loads every vocabulary, failing on the first unreadable one.
+func List(voxDir string) ([]*Vocabulary, error) {
+	names, err := Names(voxDir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Vocabulary, 0, len(names))
+	for _, name := range names {
 		v, err := Load(voxDir, name)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		out = append(out, v)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 
@@ -127,10 +156,15 @@ func (v *Vocabulary) Resolve(model string) (words []dashscope.Hotword, warnings 
 	sort.Strings(names)
 
 	superCount, clamped, oversized := 0, 0, 0
-	for _, word := range names {
+	for _, name := range names {
+		word := strings.TrimSpace(name)
+		if word == "" {
+			warnings = append(warnings, "dropped a blank word entry")
+			continue
+		}
 		weight := defaultWeight
-		if merged[word] != nil {
-			weight = *merged[word]
+		if merged[name] != nil {
+			weight = *merged[name]
 		}
 		if weight == SuperWeight {
 			if !dashscope.SuperHotwordsSupported(model) {
@@ -143,9 +177,9 @@ func (v *Vocabulary) Resolve(model string) (words []dashscope.Hotword, warnings 
 				superCount++
 			}
 		}
-		if weight < 1 || (weight > 5 && weight != SuperWeight) {
-			warnings = append(warnings, fmt.Sprintf("%q: weight %d out of range, using %d", word, weight, defaultWeight))
-			weight = defaultWeight
+		if !validWeight(weight) {
+			warnings = append(warnings, fmt.Sprintf("%q: weight %d out of range, using %d", word, weight, DefaultWeight))
+			weight = DefaultWeight
 		}
 		if !validLength(word) {
 			oversized++
@@ -175,11 +209,14 @@ func ContentHash(words []dashscope.Hotword) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
+// validWeight is the documented range, plus the super-hotword magic value.
+func validWeight(w int) bool { return (w >= 1 && w <= 5) || w == SuperWeight }
+
 // validLength enforces the documented word limits: at most 15 characters when
 // any non-ASCII is present, at most 7 space-separated segments when pure ASCII.
 func validLength(word string) bool {
 	runes := []rune(word)
-	if len(runes) == 0 {
+	if len(runes) == 0 || len(strings.Fields(word)) == 0 {
 		return false
 	}
 	for _, r := range runes {

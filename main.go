@@ -25,16 +25,26 @@ var cli struct {
 }
 
 func main() {
-	ctx := kong.Parse(&cli,
+	// Kong's own exit path would print human usage text and bypass the error
+	// contract, so parsing is done by hand and its failures are reported the same
+	// way as everything else.
+	parser, err := kong.New(&cli,
 		kong.Name("vox"),
 		kong.Description("Agent-facing speech to text and text to speech"),
-		kong.UsageOnError(),
 	)
+	if err != nil {
+		os.Exit(report(err))
+	}
+
+	ctx, err := parser.Parse(os.Args[1:])
+	if err != nil {
+		os.Exit(report(voxerr.New(voxerr.InvalidUsage, "%s", err.Error()).
+			WithHint("vox --help")))
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		ui.Error("Failed to load config: %v", err)
-		os.Exit(1)
+		os.Exit(report(voxerr.New(voxerr.IOError, "cannot load config: %v", err)))
 	}
 
 	if err := ctx.Run(cfg); err != nil {

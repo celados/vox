@@ -21,7 +21,7 @@ func (c *ExportCmd) Run(cfg *config.AppConfig) error {
 	if err != nil {
 		return err
 	}
-	rec, err := store.Load(sid)
+	rec, err := store.Load(sid, "")
 	if err != nil {
 		return voxerr.New(voxerr.SessionNotFound, "run %s has no stored result: %v", sid, err)
 	}

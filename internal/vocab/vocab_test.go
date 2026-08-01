@@ -1,10 +1,14 @@
 package vocab
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/celados/vox/internal/dashscope"
+	"github.com/celados/vox/internal/voxerr"
 )
 
 func weight(n int) *int { return &n }
@@ -192,5 +196,66 @@ func TestClaimedIDsIgnoresDeletedYAML(t *testing.T) {
 	}
 	if _, ok := idx["kept"]; !ok {
 		t.Error("live index entry was dropped")
+	}
+}
+
+// Regression: a corrupt index used to be reported as empty, which made `prune`
+// consider nothing claimed and delete every hotword list on the account.
+func TestLoadIndexFailsClosedOnCorruption(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(Dir(dir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(Dir(dir), ".index.json"), []byte("{not json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx, err := LoadIndex(dir)
+	if err == nil {
+		t.Fatalf("a corrupt index must be an error, got %v", idx)
+	}
+	var e *voxerr.Error
+	if !errors.As(err, &e) || e.Code != voxerr.VocabIndexCorrupt {
+		t.Errorf("code = %v, want %s", err, voxerr.VocabIndexCorrupt)
+	}
+}
+
+func TestLoadRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(Dir(dir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// `word:` instead of `words:` would otherwise resolve to an empty vocabulary
+	// that changes nothing about recognition, with no signal to the user.
+	if err := os.WriteFile(Path(dir, "typo"), []byte("word:\n  百炼: 5\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, "typo"); err == nil {
+		t.Error("an unknown field must be rejected")
+	}
+}
+
+func TestLoadRejectsInvalidDefaultWeight(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(Dir(dir), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(dir, "bad"), []byte("default_weight: 99\nwords:\n  x: \n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(dir, "bad"); err == nil {
+		t.Error("an out-of-range default_weight must be rejected, not silently sent")
+	}
+}
+
+func TestResolveDropsBlankWords(t *testing.T) {
+	v := fixture()
+	v.File.Words["   "] = weight(4)
+
+	words, _ := v.Resolve(dashscope.ModelFunASRFlash)
+	for _, w := range words {
+		if strings.TrimSpace(w.Text) == "" {
+			t.Error("a blank word reached the request")
+		}
 	}
 }

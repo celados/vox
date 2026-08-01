@@ -2,6 +2,7 @@ package vocab
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,9 @@ type Index map[string]map[string]Entry
 
 func indexPath(voxDir string) string { return filepath.Join(Dir(voxDir), ".index.json") }
 
+// LoadIndex fails closed on a corrupt index. Treating it as empty would be far
+// worse than an error: `prune` would then see nothing claimed and delete every
+// hotword list on the account.
 func LoadIndex(voxDir string) (Index, error) {
 	data, err := os.ReadFile(indexPath(voxDir))
 	if err != nil {
@@ -37,11 +41,14 @@ func LoadIndex(voxDir string) (Index, error) {
 	}
 	idx := Index{}
 	if err := json.Unmarshal(data, &idx); err != nil {
-		return Index{}, nil // a corrupt index is rebuildable; never fatal
+		return nil, voxerr.New(voxerr.VocabIndexCorrupt,
+			"%s is not readable: %v", Tilde(indexPath(voxDir)), err).
+			WithHint("inspect it, or delete it and re-run `vox vocab sync --all`")
 	}
 	return idx, nil
 }
 
+// Save writes through a temp file so a reader never sees a truncated index.
 func (idx Index) Save(voxDir string) error {
 	if err := os.MkdirAll(Dir(voxDir), 0755); err != nil {
 		return err
@@ -50,7 +57,24 @@ func (idx Index) Save(voxDir string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(indexPath(voxDir), data, 0644)
+	tmp, err := os.CreateTemp(Dir(voxDir), ".index-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), indexPath(voxDir))
 }
 
 func (idx Index) Get(name, model string) (Entry, bool) {
@@ -123,19 +147,37 @@ func Sync(client *dashscope.Client, voxDir string, v *Vocabulary, model string, 
 	result := &SyncResult{ContentHash: hash, Warnings: warnings}
 
 	if entry, ok := idx.Get(v.Name, model); ok {
-		if entry.ContentHash == hash && !force {
-			result.VocabularyID, result.Action = entry.VocabularyID, "reused"
+		// The recognition API accepts a vocabulary_id built for another model and
+		// silently ignores the hotwords, so the binding is verified here rather
+		// than trusted. A list that has vanished or drifted falls through to a
+		// fresh create.
+		switch err := verifyBinding(client, entry.VocabularyID, model); {
+		case err == nil:
+			if entry.ContentHash == hash && !force {
+				result.VocabularyID, result.Action = entry.VocabularyID, "reused"
+				return result, nil
+			}
+			if err := client.UpdateVocabulary(entry.VocabularyID, words); err != nil {
+				return nil, apiError(err)
+			}
+			if err := client.AwaitVocabulary(entry.VocabularyID, deployTimeout); err != nil {
+				return nil, apiError(err)
+			}
+			idx.Set(v.Name, model, Entry{VocabularyID: entry.VocabularyID, ContentHash: hash, SyncedAt: time.Now()})
+			if err := idx.Save(voxDir); err != nil {
+				return nil, err
+			}
+			result.VocabularyID, result.Action = entry.VocabularyID, "updated"
 			return result, nil
-		}
-		if err := client.UpdateVocabulary(entry.VocabularyID, words); err != nil {
-			return nil, apiError(err)
-		}
-		idx.Set(v.Name, model, Entry{VocabularyID: entry.VocabularyID, ContentHash: hash, SyncedAt: time.Now()})
-		if err := idx.Save(voxDir); err != nil {
+
+		case isMismatch(err):
 			return nil, err
+
+		default:
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("stored list %s is gone; recreating", entry.VocabularyID))
+			delete(idx[v.Name], model)
 		}
-		result.VocabularyID, result.Action = entry.VocabularyID, "updated"
-		return result, nil
 	}
 
 	// The account cap is shared across every model, so check before creating.
@@ -197,6 +239,30 @@ func Prune(client *dashscope.Client, voxDir string, dryRun bool) ([]string, erro
 		}
 	}
 	return orphans, nil
+}
+
+// verifyBinding confirms the remote list still exists and still belongs to the
+// model we are about to recognize with.
+func verifyBinding(client *dashscope.Client, vocabularyID, model string) error {
+	info, _, err := client.QueryVocabulary(vocabularyID)
+	if err != nil {
+		return err // treated as "gone": the caller recreates
+	}
+	if info.TargetModel != "" && info.TargetModel != model {
+		return voxerr.New(voxerr.VocabModelMismatch,
+			"list %s was built for %s, not %s — its hotwords would be ignored",
+			vocabularyID, info.TargetModel, model).
+			WithHint("vox vocab sync <name> --model %s", model)
+	}
+	if info.Status != "" && info.Status != "OK" {
+		return fmt.Errorf("list %s is %s", vocabularyID, info.Status)
+	}
+	return nil
+}
+
+func isMismatch(err error) bool {
+	var e *voxerr.Error
+	return errors.As(err, &e) && e.Code == voxerr.VocabModelMismatch
 }
 
 func apiError(err error) error {

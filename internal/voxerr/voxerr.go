@@ -13,9 +13,12 @@ const (
 	VocabNotFound      = "vocab_not_found"
 	VocabQuotaExceeded = "vocab_quota_exceeded"
 	VocabModelMismatch = "vocab_model_mismatch"
+	VocabIndexCorrupt  = "vocab_index_corrupt"
 	SessionNotFound    = "session_not_found"
 	SessionAmbiguous   = "session_ambiguous"
 	APIError           = "api_error"
+	InvalidUsage       = "invalid_usage"
+	IOError            = "io_error"
 )
 
 // Exit codes.
@@ -35,7 +38,7 @@ func (e *Error) Error() string { return e.Message }
 
 func (e *Error) ExitCode() int {
 	switch e.Code {
-	case APIError:
+	case APIError, IOError:
 		return ExitAPI
 	case SessionNotFound, VocabNotFound:
 		return ExitNotFound
