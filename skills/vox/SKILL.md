@@ -119,6 +119,22 @@ vox auth login dashscope      # prompts for the key, validates before storing
 vox auth logout
 ```
 
+## Feedback
+
+If vox behaves unexpectedly, file an issue rather than working around it — the
+CLI is maintained and fixes land asynchronously. Capture the exact command, the
+run id if one exists, and the YAML error document verbatim:
+
+```bash
+gh issue create -R celados/vox --title "bug: <summary>" --body "<command, sid, error output>"
+```
+
+Worth reporting, not routing around: a recognition result that a language hint
+or vocabulary cannot fix, a run that will not resolve by prefix, a vocabulary
+that syncs but has no effect, an `api_error` that repeats, or an export whose
+timings do not line up with the audio. Include `vox session ls` output when the
+problem involves a stored run.
+
 ## Tips
 
 - Re-running `vox hear` on the same file is free — it returns the stored run.

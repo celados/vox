@@ -169,6 +169,11 @@ vox cache status
   cache/               TTS audio
 ```
 
+## Feedback
+
+Issues go to [celados/vox](https://github.com/celados/vox/issues) — include the
+command, the run id, and the YAML error document.
+
 ## License
 
 MIT
