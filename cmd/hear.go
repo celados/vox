@@ -28,7 +28,7 @@ const (
 
 type HearCmd struct {
 	File     string   `arg:"" help:"Audio file to transcribe"`
-	Model    string   `short:"m" default:"fun-asr" enum:"fun-asr,qwen-audio-3.0-asr-flash-filetrans" help:"ASR model"`
+	Model    string   `short:"m" default:"fun" enum:"fun,qwen" help:"Vendor: fun (Fun-ASR) or qwen (Qwen-Audio)"`
 	Vocab    string   `short:"v" help:"Vocabulary name under ~/.vox/vocabulary/"`
 	Lang     []string `short:"l" help:"Language hint, e.g. zh or en (repeatable; auto-detect when unset)"`
 	Speakers bool     `help:"Label speakers (recommended under 2 hours)"`
@@ -41,6 +41,9 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 		return err
 	}
 	client := dashscope.NewClient(apiKey)
+	// The alias is the surface; the pinned model id is what identifies the run,
+	// so re-pinning to a newer snapshot correctly invalidates stored runs.
+	model, _ := dashscope.ResolveModel(c.Model)
 
 	audioData, format, source, err := c.read()
 	if err != nil {
@@ -61,7 +64,7 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	// server-side list is only reconciled on a miss.
 	var vocabulary *vocab.Vocabulary
 	args := run.Args{
-		Model:    c.Model,
+		Model:    model,
 		Format:   format,
 		Lang:     normalize(c.Lang),
 		Speakers: c.Speakers,
@@ -70,7 +73,7 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 		if vocabulary, err = vocab.Load(cfg.Dir, c.Vocab); err != nil {
 			return err
 		}
-		words, warnings := vocabulary.Resolve(c.Model)
+		words, warnings := vocabulary.Resolve(model)
 		for _, w := range warnings {
 			ui.Warn("%s", w)
 		}
@@ -93,7 +96,7 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 
 	var vocabularyID string
 	if vocabulary != nil {
-		result, err := vocab.Sync(client, cfg.Dir, vocabulary, c.Model, false)
+		result, err := vocab.Sync(client, cfg.Dir, vocabulary, model, false)
 		if err != nil {
 			return err
 		}
@@ -104,10 +107,10 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	t0 := time.Now()
-	ui.Info("%s %s %s", ui.Dim("model"), ui.Key(c.Model), ui.Dim(formatSeconds(durationSec)))
+	ui.Info("%s %s %s", ui.Dim("model"), ui.Key(model), ui.Dim(formatSeconds(durationSec)))
 
 	result, err := client.TranscribeFile(filepath.Base(source), audioData, dashscope.FileOptions{
-		Model:         c.Model,
+		Model:         model,
 		VocabularyID:  vocabularyID,
 		LanguageHints: args.Lang,
 		Diarization:   args.Speakers,
@@ -129,7 +132,7 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 		Meta: run.Meta{
 			SID:     sid,
 			Source:  run.Tilde(source),
-			Model:   c.Model,
+			Model:   model,
 			Vocab:   vocabLabel,
 			Lang:    args.Lang,
 			Created: time.Now().UTC(),

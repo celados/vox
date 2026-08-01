@@ -90,10 +90,10 @@ Every transcription is a file job: the audio is uploaded to Model Studio's free
 completion — roughly a minute per 45 minutes of audio. Nothing to host, no
 credentials beyond the API key.
 
-| Model | Hotword lists | Super hotwords | Diarization |
-|-------|---------------|----------------|-------------|
-| `fun-asr` (default) | yes | no | yes |
-| `qwen-audio-3.0-asr-flash-filetrans` | yes | yes (weight 50) | yes |
+| `-m` | Model | Hotword lists | Super hotwords | Diarization |
+|------|-------|---------------|----------------|-------------|
+| `fun` (default) | `fun-asr` | yes | no | yes |
+| `qwen` | `qwen-audio-3.0-asr-flash-filetrans` | yes | yes (weight 50) | yes |
 
 Both cap at 12 hours / 2GB and cover Mandarin plus major dialects and ~30 other
 languages. Sentence boundaries, word timings and per-word confidence come from
@@ -115,7 +115,7 @@ words:
 
 # Optional: per-model intent. Merged over the base, model block wins.
 models:
-  fun-asr:
+  fun-asr:      # keyed by the resolved model id, not the -m alias
     words:
       声网: 5
 ```
@@ -132,7 +132,7 @@ content is part of the run id, editing the YAML produces a new run on the next
 `hear` with no cache-busting flag.
 
 Model-specific API limits are applied by the adapter, not by you: `weight: 50`
-is clamped to 5 on `fun-asr`, unsupported language codes are dropped, oversized
+is clamped to 5 on `fun`, unsupported language codes are dropped, oversized
 words are skipped, and each is reported on stderr. **The account cap is 10 lists
 shared across all models** — one vocabulary synced to both models consumes two.
 

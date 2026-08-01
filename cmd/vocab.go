@@ -91,7 +91,7 @@ func quotaUsage(cfg *config.AppConfig) string {
 type VocabSyncCmd struct {
 	Name  string `arg:"" optional:"" help:"Vocabulary name"`
 	All   bool   `help:"Sync every local vocabulary"`
-	Model string `short:"m" default:"fun-asr-flash-2026-06-15" enum:"fun-asr-flash-2026-06-15,qwen-audio-3.0-asr-flash" help:"Target model"`
+	Model string `short:"m" default:"fun" enum:"fun,qwen" help:"Target vendor: fun or qwen"`
 	Force bool   `help:"Push even when the content hash is unchanged"`
 }
 
@@ -101,6 +101,7 @@ func (c *VocabSyncCmd) Run(cfg *config.AppConfig) error {
 		return err
 	}
 	client := dashscope.NewClient(apiKey)
+	model, _ := dashscope.ResolveModel(c.Model)
 
 	var targets []*vocab.Vocabulary
 	if c.All {
@@ -116,7 +117,7 @@ func (c *VocabSyncCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	for _, v := range targets {
-		result, err := vocab.Sync(client, cfg.Dir, v, c.Model, c.Force)
+		result, err := vocab.Sync(client, cfg.Dir, v, model, c.Force)
 		if err != nil {
 			return err
 		}

@@ -16,6 +16,10 @@ const (
 	transcriptionPath = "/services/audio/asr/transcription"
 	tasksPath         = "/tasks/"
 
+	// Each vendor ships a family of variants — realtime, flash, 8k, streaming,
+	// dated snapshots. vox pins exactly one file-transcription model per vendor
+	// and exposes the vendor name; changing a pin is a deliberate edit here, not
+	// something a caller can ask for.
 	ModelFunASR        = "fun-asr"
 	ModelQwenAudioFile = "qwen-audio-3.0-asr-flash-filetrans"
 
@@ -234,4 +238,21 @@ func speakerLabel(v any) string {
 	default:
 		return ""
 	}
+}
+
+// Vendors maps the name a caller types to the pinned model. The alias is the
+// stable surface; the model id is an implementation detail that may be re-pinned
+// to a newer snapshot without changing the CLI.
+var Vendors = map[string]string{
+	"fun":  ModelFunASR,
+	"qwen": ModelQwenAudioFile,
+}
+
+// VendorNames lists the aliases in preference order; the first is the default.
+var VendorNames = []string{"fun", "qwen"}
+
+// ResolveModel turns a vendor alias into the model id sent to the API.
+func ResolveModel(vendor string) (string, bool) {
+	model, ok := Vendors[vendor]
+	return model, ok
 }

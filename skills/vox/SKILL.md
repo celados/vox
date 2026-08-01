@@ -37,7 +37,9 @@ vox export a3f1c2 --format txt             # plain transcript, pipeable
 vox export a3f1c2 --format json            # word-level timestamps
 ```
 
-Models: `fun-asr` (default) and `qwen-audio-3.0-asr-flash-filetrans` via `-m`.
+Vendors: `-m fun` (default, Fun-ASR) or `-m qwen` (Qwen-Audio). Each vendor
+ships many variants — realtime, flash, 8k, dated snapshots — and vox pins one
+file-transcription model per vendor, so the alias is all you ever pass.
 Both cap at **12 hours / 2GB**. A transcription is an upload plus an async task,
 so expect roughly a minute per 45 minutes of audio — long files are normal, not
 an edge case. Do **not** split a file to work around length: splitting truncates
@@ -87,8 +89,7 @@ Editing the YAML changes the run id, so the next `hear` re-recognizes on its own
 Two limits worth knowing before creating vocabularies: **10 lists per account,
 shared across models** (one vocabulary used with both models consumes two), and
 words are at most 15 characters when non-ASCII. Weight is 1–5; 50 is a "super
-hotword" that only `qwen-audio-3.0-asr-flash-filetrans` honours and is clamped
-elsewhere.
+hotword" that only `qwen` honours and is clamped elsewhere.
 
 ## Text to speech
 

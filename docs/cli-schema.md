@@ -6,7 +6,7 @@ description: >
   agent-facing STT/TTS tool. Runs are content-addressed; everything after
   transcription is an operation on a stored run.
 status: draft # draft | accepted | superseded
-version: 0.5
+version: 0.6
 generated: { by: claude/opus-5, at: 2026-08-01T00:00:00Z }
 ---
 
@@ -67,7 +67,7 @@ type Vox = {
    */
   hear(input: {
     file: string           // positional
-    model?: string         // fun-asr (default) | qwen-audio-3.0-asr-flash-filetrans
+    model?: string         // vendor: fun (default) | qwen
     vocab?: string         // vocabulary name under ~/.vox/vocabulary/<name>.yaml
     lang?: string[]        // language hints; auto-detect when unset
     speakers?: boolean     // diarization; recommended under 2 hours
@@ -136,7 +136,7 @@ type Vox = {
      *
      * @example
      * vox vocab sync meeting
-     * vox vocab sync --all --model qwen-audio-3.0-asr-flash
+     * vox vocab sync --all --model qwen
      */
     sync(input: { name?: string; all?: boolean; model?: string; force?: boolean })
     /**
@@ -169,7 +169,7 @@ submit an async task, poll it, keep the result.
 | | |
 | --- | --- |
 | Endpoint | `audio/asr/transcription`, `X-DashScope-Async: enable` |
-| Models | `fun-asr` (default) · `qwen-audio-3.0-asr-flash-filetrans` |
+| Vendors | `fun` → `fun-asr` (default) · `qwen` → `qwen-audio-3.0-asr-flash-filetrans` |
 | Cap | 12 h / 2 GB |
 | Segmentation | native, timestamped sentences |
 | Per word | text, timings, punctuation, confidence |
@@ -211,7 +211,7 @@ $vox:
 ---
 sid: a3f1c2d4e5f6
 source: ~/recordings/meeting.m4a
-model: fun-asr-flash-2026-06-15
+model: fun-asr
 vocab: meeting@8e74bef2
 lang: [zh]
 created: 2026-08-01T12:00:00Z
@@ -230,8 +230,8 @@ Errors print one YAML document to stderr and exit non-zero:
 
 ```yaml
 code: vocab_model_mismatch
-message: vocabulary "meeting" is synced for qwen-audio-3.0-asr-flash, not fun-asr-flash-2026-06-15
-hint: vox vocab sync meeting --model fun-asr-flash-2026-06-15
+message: list vocab-meeting-8e74 was built for qwen-audio-3.0-asr-flash-filetrans, not fun-asr
+hint: vox vocab sync meeting --model fun
 ```
 
 Exit codes: `0` success · `1` usage/validation · `2` API or local I/O failure ·
@@ -299,7 +299,7 @@ words:
 
 # Escape hatch. Merged over the base, model block wins. Most files omit it.
 models:
-  fun-asr-flash-2026-06-15:
+  fun-asr:      # keyed by the resolved model id, not the -m alias
     words:
       声网: 5
 ```
@@ -354,15 +354,15 @@ Measured 2026-08-01 against the live API; these decide the shape above.
 - **`language_hints` is the real quality lever.** The same file, same endpoint:
   proper nouns came back correct with `-l zh` and wrong without it. Attribute
   recognition wins to the hint, not to a model or an endpoint.
-- **Precompiled vocabularies work on `fun-asr-flash-2026-06-15`.** The model
-  list page claims otherwise; the hotword page and the API agree it works.
-  Baseline `别连语音识别测试，funASR和昆都要跑通。` → with vocabulary
-  `百炼语音识别测试，Fun-ASR和Kun都要跑通。` No context-prompt fallback is needed.
-- **The API does not segment sentences on this path.** An 11s four-sentence take
-  returns one `sentence` object spanning 120–10640ms, and SSE emits exactly one
-  event — streaming buys nothing. Subtitle cues must be derived from
-  `words[].punctuation` and inter-word gaps, which is why `export` owns the
-  segmentation knobs.
+- **Precompiled vocabularies work on the Fun-ASR family.** The model list page
+  claims otherwise; the hotword page and the API agree it works. Measured on a
+  clip whose proper nouns were wrong without a vocabulary and right with one, so
+  no context-prompt fallback is needed.
+- **The removed synchronous endpoint did not segment.** An 11s four-sentence
+  take came back as one `sentence` spanning the whole file, over SSE too. The
+  file-transcription endpoint segments natively — 440 sentences for the same
+  45-minute recording — which is why cues follow the service and the word-level
+  splitter is only a divider for over-long sentences.
 - `create_vocabulary` returned `status: OK` immediately, but the polling loop
   stays: the documented `UNDEPLOYED` state is not contractually excluded.
 - The legacy host `dashscope.aliyuncs.com` serves both the recognition and the
