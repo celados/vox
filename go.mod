@@ -1,4 +1,4 @@
-module github.com/ontypehq/vox
+module github.com/celados/vox
 
 go 1.25.0
 

@@ -4,9 +4,9 @@ import (
 	"os"
 
 	"github.com/alecthomas/kong"
-	"github.com/ontypehq/vox/cmd"
-	"github.com/ontypehq/vox/internal/config"
-	"github.com/ontypehq/vox/internal/ui"
+	"github.com/celados/vox/cmd"
+	"github.com/celados/vox/internal/config"
+	"github.com/celados/vox/internal/ui"
 )
 
 var cli struct {

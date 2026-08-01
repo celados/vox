@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"github.com/ontypehq/vox/internal/config"
-	"github.com/ontypehq/vox/internal/ui"
+	"github.com/celados/vox/internal/config"
+	"github.com/celados/vox/internal/ui"
 )
 
 type AuthCmd struct {

@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/ontypehq/vox/internal/audio"
-	"github.com/ontypehq/vox/internal/config"
-	"github.com/ontypehq/vox/internal/dashscope"
-	"github.com/ontypehq/vox/internal/ui"
+	"github.com/celados/vox/internal/audio"
+	"github.com/celados/vox/internal/config"
+	"github.com/celados/vox/internal/dashscope"
+	"github.com/celados/vox/internal/ui"
 )
 
 type SayCmd struct {

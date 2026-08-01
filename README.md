@@ -7,7 +7,7 @@ Record your voice once, speak in any language. Transcribe speech to text. Listen
 ## Install
 
 ```bash
-go install github.com/ontypehq/vox@latest
+go install github.com/celados/vox@latest
 ```
 
 Requires `ffmpeg` for audio cache compression (`brew install ffmpeg`).
