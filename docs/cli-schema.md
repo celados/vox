@@ -3,10 +3,10 @@ type: Spec
 title: vox CLI surface
 description: >
   The command surface, output contracts, and on-disk data model for vox as an
-  agent-facing STT/TTS tool. Sessions are content-addressed; everything after
-  transcription is a session operation.
+  agent-facing STT/TTS tool. Runs are content-addressed; everything after
+  transcription is an operation on a stored run.
 status: draft # draft | accepted | superseded
-version: 0.1
+version: 0.2
 generated: { by: claude/opus-5, at: 2026-08-01T00:00:00Z }
 ---
 
@@ -17,13 +17,15 @@ are, what they print, and what state they leave behind.
 
 Three invariants the whole surface is built on:
 
-1. **Content-addressed sessions.** `sid = short_hash(audio, recognition args)`.
-   The same input always yields the same `sid`, and a repeated call costs zero
-   API requests.
+1. **Content-addressed runs.** `sid = short_hash(audio, recognition args)`. The
+   same input always yields the same `sid`, and a repeated call costs zero API
+   requests. `sid` is something commands *return*, never something you pass in
+   to select an output mode.
 2. **One transcription, many exports.** Recognition happens once. Markdown,
-   subtitles, and plain text are pure functions over a stored session.
-3. **One thing on stdout.** Every command writes exactly one machine-consumable
-   artifact to stdout; all human-facing progress goes to stderr.
+   subtitles, and plain text are pure functions over a stored run.
+3. **Index out, content out — never both.** `hear`, `session ls` and `vocab ls`
+   emit a YAML index on stdout. `export` emits the document itself. Human
+   progress goes to stderr. There are no `--json` / `--sid` output-mode flags.
 
 ## Schema
 
@@ -47,15 +49,15 @@ type Vox = {
   }
 
   /**
-   * Transcribe audio into a session. Idempotent: an existing sid returns the
-   * stored result without calling the API.
+   * Transcribe audio into a run. Idempotent: an existing sid returns the stored
+   * record without calling the API. Duration and size are checked locally
+   * before upload — over the limit is audio_too_large, not a server rejection.
    *
-   * stdout: transcript text (default) · sid (--sid) · full run JSON (--json)
+   * stdout: the run's YAML envelope (see Output contract)
    *
    * @example
    * vox hear meeting.m4a
-   * vox hear meeting.m4a --vocab meeting --sid
-   * vox hear meeting.m4a --lang zh --json
+   * vox hear meeting.m4a --vocab meeting --lang zh
    * vox hear --mic --duration 10
    */
   hear(input: {
@@ -66,41 +68,24 @@ type Vox = {
     vocab?: string         // vocabulary name under ~/.vox/vocabulary/<name>.yaml
     lang?: string[]        // language hints; auto-detect when unset
     context?: string[]     // prompt context, max 5 entries / 400 chars per round
-    sid?: boolean          // print only the session id
-    json?: boolean         // print the full run record
-    noCache?: boolean      // force re-recognition, overwriting the stored run
+    refresh?: boolean      // re-recognize and overwrite the stored run
   })
 
-  /** Inspect and manage stored sessions. */
+  /** The stored runs. */
   session: {
     /**
-     * List sessions, newest first. --file filters to one source path.
-     *
-     * stdout: TSV — sid, created, model, duration, source
+     * The run index, newest first — the same envelope `hear` returns, one entry
+     * per run, without the transcript. This is the only way to browse; there is
+     * no show/path, because the index carries the path and `export` carries the
+     * content.
      *
      * @example
      * vox session ls
      * vox session ls --file meeting.m4a
-     * vox session ls --json
      */
-    list(input: { file?: string; limit?: number; json?: boolean })
+    list(input: { file?: string; limit?: number })
     /**
-     * Show one session. Accepts a unique sid prefix.
-     *
-     * @example
-     * vox session show a3f1c2
-     * vox session show a3f1c2 --json
-     */
-    show(input: { sid: string; json?: boolean })
-    /**
-     * Print the session directory path so an agent can read the files directly.
-     *
-     * @example
-     * vox session path a3f1c2
-     */
-    path(input: { sid: string })
-    /**
-     * Delete sessions.
+     * Delete runs. Accepts a unique sid prefix.
      *
      * @example
      * vox session rm a3f1c2
@@ -110,24 +95,20 @@ type Vox = {
   }
 
   /**
-   * Render a stored session. Subtitle segmentation is computed client-side from
-   * word timestamps and punctuation — the API returns the whole take as one
-   * sentence, so the segmentation knobs live here.
+   * Render a stored run. Subtitle cues are segmented client-side from word
+   * timestamps and punctuation, because the API returns the whole take as one
+   * sentence. Cue length and duration are fixed conventions, not flags.
    *
    * stdout: the rendered document (or nothing, with --output)
    *
    * @example
-   * vox export a3f1c2 --format srt
-   * vox export a3f1c2 --format srt --max-chars 24 --output meeting.srt
    * vox export a3f1c2 --format md
+   * vox export a3f1c2 --format srt --output meeting.srt
    */
   export(input: {
     sid: string
     format: "srt" | "vtt" | "md" | "txt" | "json"
     output?: string        // write to a file instead of stdout
-    maxChars?: number      // subtitle line budget (srt/vtt, default 28)
-    maxDuration?: number   // max seconds per cue (srt/vtt, default 6)
-    gapMs?: number         // inter-word pause that forces a split (default 400)
   })
 
   /**
@@ -137,24 +118,14 @@ type Vox = {
    */
   vocab: {
     /**
-     * List local vocabularies with per-model sync state and remote quota usage.
-     *
-     * stdout: TSV — name, words, models synced, drift
+     * The vocabulary index: name, path, word count, per-model sync state, and
+     * remote quota usage. Same reasoning as `session ls` — the index carries the
+     * path, so an agent reads and writes the YAML directly.
      *
      * @example
      * vox vocab ls
      */
-    list(input: { json?: boolean })
-    /** Show one vocabulary's resolved words and its server-side ids. */
-    show(input: { name: string; json?: boolean })
-    /**
-     * Print the YAML path for a vocabulary so an agent can write it directly.
-     * Prints the directory when name is omitted.
-     *
-     * @example
-     * vox vocab path meeting
-     */
-    path(input: { name?: string })
+    list()
     /**
      * Push local YAML to the server for a target model. Content-hash equal is a
      * no-op; changed content updates in place, keeping the same vocabulary_id.
@@ -175,55 +146,58 @@ type Vox = {
     prune(input: { dryRun?: boolean })
   }
 
-  /**
-   * Speak text with TTS. Streams to the speaker, or writes a file with --output.
-   *
-   * @example
-   * vox say "Hello world" --voice Cherry
-   * vox say "你好世界" --output greeting.wav
-   */
-  say(input: {
-    text: string
-    voice?: string
-    lang?: string
-    instruct?: string      // expressive style; system voices only
-    speed?: number         // 0.5-2.0, default 1.0
-    output?: string
-    noCache?: boolean
-  })
-
-  /** Manage cloned voice profiles. */
-  voice: {
-    list(input: { json?: boolean })
-    /**
-     * Enroll a cloned voice from a file or a live recording.
-     *
-     * @example
-     * vox voice record --file sample.wav --name myvoice
-     */
-    record(input: { file?: string; name: string; lang?: string; duration?: number })
-    remove(input: { voiceId: string })
-  }
-
-  /** TTS audio cache. Sessions are managed with `vox session rm`. */
-  cache: {
-    status()
-    clear()
-  }
+  // --- legacy, unchanged, pending its own redesign ---
+  say(input: { text: string; voice?: string; lang?: string; instruct?: string; speed?: number; output?: string; noCache?: boolean })
+  voice: { list(); record(input: { file?: string; name: string; lang?: string; duration?: number }); remove(input: { voiceId: string }) }
+  cache: { status(); clear() }
 }
 ```
+
+`say`, `voice` and `cache` carry over as-is. `cache` is the degenerate form of a
+run — a key→artifact map with no metadata and no index — and it exists only
+because TTS has not been moved onto runs yet. When `say` gets the same
+content-addressed treatment, the `cache` group disappears into `session`.
 
 ## Output contract
 
 | Stream | Carries |
 | ------ | ------- |
-| stdout | Exactly one artifact: transcript, sid, TSV table, or rendered document. Never mixed. |
+| stdout | A YAML index (`hear`, `session ls`, `vocab ls`) or a rendered document (`export`). Never both, never mixed. |
 | stderr | Progress, model/latency lines, warnings, and errors. |
 
-Errors print a single JSON object to stderr and exit non-zero:
+`hear` returns the run envelope. A short take inlines its transcript; a long one
+folds to a preview and tells the caller how to read the rest — the same
+threshold behaviour `ctx read` uses, so an agent never eats an unbounded
+transcript it did not ask for:
 
-```json
-{ "code": "vocab_model_mismatch", "message": "...", "hint": "vox vocab sync meeting --model fun-asr-flash-2026-06-15" }
+```yaml
+---
+$vox:
+- "Transcript folded at 2000 tokens. Read it with `vox export a3f1c2 --format md`."
+---
+sid: a3f1c2d4e5f6
+source: ~/recordings/meeting.m4a
+model: fun-asr-flash-2026-06-15
+vocab: meeting@8e74bef2
+lang: [zh]
+created: 2026-08-01T12:00:00Z
+path: ~/.vox/runs/a3f1c2d4e5f6
+size: { tokens: 9800, words: 19600, chars: 29400, duration: 1830 }
+preview: 第一句话，我们在测试句子切分，第二句话，字幕需要每一句的时间戳…
+```
+
+Under the threshold the `$vox` block and `preview` are replaced by a `text`
+field carrying the full transcript, so the common short-clip case stays a single
+command.
+
+`session ls` is the same records as a YAML list, without `text` or `preview`.
+
+Errors print one YAML document to stderr and exit non-zero:
+
+```yaml
+code: vocab_model_mismatch
+message: vocabulary "meeting" is synced for qwen-audio-3.0-asr-flash, not fun-asr-flash-2026-06-15
+hint: vox vocab sync meeting --model fun-asr-flash-2026-06-15
 ```
 
 Exit codes: `0` success · `1` usage/validation · `2` API failure · `3` not found.
@@ -239,14 +213,14 @@ set: `not_authenticated`, `audio_too_large`, `audio_unsupported`,
 ~/.vox/
   config.json                    credentials (0600)
   state.json                     last-used voice
-  sessions/<sid>/
-    meta.json                    source path, size, sha256, format, duration, created_at, args
+  runs/<sid>/
+    meta.yaml                    the envelope: source, args, size, created_at
     audio.<ext>                  the source audio, copied in
     run.json                     model, vocabulary snapshot, text, words[], usage
   vocabulary/
     <name>.yaml                  source of truth, hand- or agent-edited
     .index.json                  name → { model → { vocabulary_id, content_hash, synced_at } }
-  cache/                         TTS audio (opus)
+  cache/                         TTS audio (opus) — legacy, folds into runs/ later
 ```
 
 `sid` is the first 12 hex of `sha256(audio_bytes ‖ canonical(args))`, where
@@ -254,8 +228,7 @@ set: `not_authenticated`, `audio_too_large`, `audio_unsupported`,
 vocabulary's **content hash** — not its name. Editing a vocabulary YAML
 therefore produces a new `sid` on the next run, with no cache-busting flag.
 
-`--json` and `--format` are not part of `args`: presentation never forks a
-session.
+Export format is not part of `args`: presentation never forks a run.
 
 Commands taking a `sid` accept any unique prefix; an ambiguous prefix is
 `session_ambiguous`, not a guess.
@@ -323,14 +296,19 @@ Sources:
 
 ## Open
 
-- **TTS sessions.** `say` could take the same content-addressed treatment
+- **TTS runs.** `say` could take the same content-addressed treatment
   (`sid = hash(text, voice, params)` → a stable audio path), collapsing the tool
   to a single "stable id + idempotent" concept. Not decided; `say` is specified
   above in its current form.
-- **Long audio.** The non-realtime endpoint caps at 5 minutes / 10MB. Meeting
-  recordings need either `fun-asr` (12h, async filetrans, a different schema) or
-  client-side chunking with session-level merge. The session model can carry the
-  intermediate state either way.
+- **Long audio.** The non-realtime endpoint caps at 5 minutes / 10MB, so `hear`
+  pre-checks and refuses. That refusal is the honest end state until we pick a
+  path: `fun-asr` (12h, async filetrans, a different schema) or client-side
+  chunking with run-level merge. The run model carries the intermediate state
+  either way.
+
+- **Envelope fold threshold.** Written as 2000 tokens. It only needs to be small
+  enough that an agent doing `hear` on an hour of audio does not get 10k tokens
+  it did not ask for.
 - **Qwen retirement.** Kept as a valid `--model` value at zero maintenance cost
   now that both models share one code path. Its only exclusive features are
   inline hotwords (deliberately unused) and super hotwords.
