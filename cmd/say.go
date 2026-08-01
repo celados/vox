@@ -87,12 +87,12 @@ func (c *SayCmd) Run(cfg *config.AppConfig) error {
 	defer cancel()
 
 	opts := dashscope.TTSOptions{
-		Model:       model,
-		Voice:       voice,
-		Text:        c.Text,
-		Lang:        c.Lang,
-		Instruct:    c.Instruct,
-		SpeechRate:  c.Speed,
+		Model:      model,
+		Voice:      voice,
+		Text:       c.Text,
+		Lang:       c.Lang,
+		Instruct:   c.Instruct,
+		SpeechRate: c.Speed,
 	}
 	err = client.StreamTTS(ctx, opts, func(pcm []byte) {
 		if !firstChunk {

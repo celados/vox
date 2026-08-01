@@ -206,7 +206,7 @@ func wrapPCMAsWAV(pcm []byte) []byte {
 		1, 0, // mono
 		byte(sr), byte(sr >> 8), byte(sr >> 16), byte(sr >> 24),
 		byte(br), byte(br >> 8), byte(br >> 16), byte(br >> 24),
-		2, 0,  // block align
+		2, 0, // block align
 		16, 0, // bits per sample
 		'd', 'a', 't', 'a',
 		byte(dataLen), byte(dataLen >> 8), byte(dataLen >> 16), byte(dataLen >> 24),

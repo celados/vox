@@ -38,8 +38,8 @@ func (c *Client) EnrollVoice(name string, audioBase64 string) (string, error) {
 	body := map[string]any{
 		"model": ModelEnrollment,
 		"input": map[string]any{
-			"action":       "create",
-			"target_model": ModelVCRealtime,
+			"action":         "create",
+			"target_model":   ModelVCRealtime,
 			"preferred_name": name,
 			"audio": map[string]string{
 				"data": "data:audio/wav;base64," + audioBase64,
