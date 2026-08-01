@@ -2,9 +2,10 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/celados/vox/internal/voxerr"
 )
 
 const appDir = ".vox"
@@ -66,7 +67,8 @@ func (ac *AppConfig) SaveState() error {
 func (ac *AppConfig) RequireAPIKey() (string, error) {
 	key := ac.Config.Services.DashScope.APIKey
 	if key == "" {
-		return "", fmt.Errorf("not authenticated — run: vox auth login dashscope --token <key>")
+		return "", voxerr.New(voxerr.NotAuthenticated, "no DashScope credentials stored").
+			WithHint("vox auth login dashscope")
 	}
 	return key, nil
 }

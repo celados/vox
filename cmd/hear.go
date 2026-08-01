@@ -1,33 +1,40 @@
 package cmd
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/celados/vox/internal/audio"
 	"github.com/celados/vox/internal/config"
 	"github.com/celados/vox/internal/dashscope"
+	"github.com/celados/vox/internal/run"
 	"github.com/celados/vox/internal/ui"
+	"github.com/celados/vox/internal/vocab"
+	"github.com/celados/vox/internal/voxerr"
 )
 
-const asrSampleRate = 16000
+const (
+	asrSampleRate = 16000
+	// foldTokens is where the envelope stops inlining the transcript. It only
+	// needs to be small enough that transcribing an hour of audio does not hand
+	// a caller ten thousand tokens it did not ask for.
+	foldTokens = 2000
+	// previewRunes is the folded envelope's excerpt length.
+	previewRunes = 60
+)
 
 type HearCmd struct {
-	File     string   `short:"f" help:"Transcribe an existing audio file instead of recording"`
-	Duration int      `short:"d" default:"5" help:"Recording duration in seconds"`
-	Model    string   `short:"m" default:"qwen-audio-3.0-asr-flash" enum:"qwen-audio-3.0-asr-flash,fun-asr-flash-2026-06-15" help:"ASR model"`
-	Context  []string `short:"c" help:"Text context to improve recognition, e.g. domain terms (repeatable)"`
+	File     string   `arg:"" optional:"" help:"Audio file to transcribe"`
+	Mic      bool     `help:"Record from the default input device instead"`
+	Duration int      `short:"d" default:"5" help:"Recording duration in seconds (--mic only)"`
+	Model    string   `short:"m" default:"fun-asr-flash-2026-06-15" enum:"fun-asr-flash-2026-06-15,qwen-audio-3.0-asr-flash" help:"ASR model"`
+	Vocab    string   `short:"v" help:"Vocabulary name under ~/.vox/vocabulary/"`
 	Lang     []string `short:"l" help:"Language hint, e.g. zh or en (repeatable; auto-detect when unset)"`
-	Hotword  []string `help:"Instant hotword as word=weight, weight 1-5 or 50 (repeatable, qwen only)"`
-	JSON     bool     `help:"Emit the full result with word-level timestamps as JSON"`
-	NoCache  bool     `help:"Skip transcription cache"`
+	Context  []string `short:"c" help:"Prompt context to improve recognition (repeatable)"`
+	Refresh  bool     `help:"Re-recognize and overwrite the stored run"`
 }
 
 func (c *HearCmd) Run(cfg *config.AppConfig) error {
@@ -35,136 +42,171 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	if err != nil {
 		return err
 	}
+	if c.File == "" && !c.Mic {
+		return voxerr.New(voxerr.AudioUnsupported, "no audio given").
+			WithHint("vox hear <file>  ·  vox hear --mic")
+	}
 
-	vocabulary, err := parseHotwords(c.Hotword)
+	client := dashscope.NewClient(apiKey)
+	args := run.Args{Model: c.Model, Lang: c.Lang, Context: c.Context}
+
+	// The vocabulary is synced before hashing: its resolved content is part of
+	// the run identity, so editing the YAML yields a new sid on the next call.
+	var vocabularyID string
+	if c.Vocab != "" {
+		v, err := vocab.Load(cfg.Dir, c.Vocab)
+		if err != nil {
+			return err
+		}
+		result, err := vocab.Sync(client, cfg.Dir, v, c.Model, false)
+		if err != nil {
+			return err
+		}
+		for _, w := range result.Warnings {
+			ui.Warn("%s", w)
+		}
+		if result.Action != "reused" {
+			ui.Info("%s %s %s", ui.Dim("vocab"), ui.Key(c.Vocab), ui.Dim(result.Action))
+		}
+		vocabularyID = result.VocabularyID
+		args.Vocab = c.Vocab + "@" + result.ContentHash
+	}
+
+	audioData, format, source, err := c.acquire()
 	if err != nil {
 		return err
 	}
 
-	opt := dashscope.ASROptions{
-		Model:         c.Model,
-		Format:        "wav",
-		SampleRate:    asrSampleRate,
-		Context:       c.Context,
-		Vocabulary:    vocabulary,
-		LanguageHints: c.Lang,
+	durationSec := audio.Duration(source, audioData)
+	if err := checkLimits(len(audioData), durationSec); err != nil {
+		return err
 	}
 
-	var audioData []byte
-	var cacheKey string
+	store := run.NewStore(cfg.Dir)
+	sid := run.SID(audioData, args)
 
-	if c.File != "" {
-		audioData, err = os.ReadFile(c.File)
-		if err != nil {
-			return fmt.Errorf("read file: %w", err)
+	if !c.Refresh {
+		if rec, err := store.Load(sid); err == nil {
+			ui.Info("%s", ui.Dim("stored"))
+			return printEnvelope(rec)
 		}
-		// The API takes the container format as a parameter rather than sniffing it.
-		if ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(c.File)), "."); ext != "" {
-			opt.Format = ext
-		}
-		// Sample rate is only known for audio we recorded ourselves.
-		opt.SampleRate = 0
-		ui.Info("%s %s", ui.Dim("file"), ui.Key(c.File))
-
-		cacheKey = asrCacheKey(audioData, opt)
-		if !c.NoCache {
-			if cached, err := os.ReadFile(asrCachePath(cfg.Dir, cacheKey)); err == nil {
-				ui.Info("%s", ui.Dim("cached"))
-				return emitResult(cached, c.JSON)
-			}
-		}
-	} else {
-		ui.Info("Recording for %ds... %s", c.Duration, ui.Dim("(speak now)"))
-
-		recorder, err := audio.NewRecorder(asrSampleRate, 1)
-		if err != nil {
-			return fmt.Errorf("init recorder: %w", err)
-		}
-		if err := recorder.Start(); err != nil {
-			return fmt.Errorf("start recording: %w", err)
-		}
-		time.Sleep(time.Duration(c.Duration) * time.Second)
-		pcm := recorder.Stop()
-
-		ui.Info("%s %s", ui.Dim("recorded"), ui.Dim(fmt.Sprintf("%d bytes", len(pcm))))
-		audioData = wrapPCMAsWAVWithRate(pcm, asrSampleRate)
 	}
 
 	t0 := time.Now()
 	ui.Info("%s %s", ui.Dim("model"), ui.Key(c.Model))
 
-	result, err := dashscope.NewClient(apiKey).Transcribe(audioData, opt)
+	result, err := client.Transcribe(audioData, dashscope.ASROptions{
+		Model:         c.Model,
+		Format:        format,
+		SampleRate:    sampleRateFor(c.File),
+		Context:       c.Context,
+		VocabularyID:  vocabularyID,
+		LanguageHints: c.Lang,
+	})
 	if err != nil {
-		return fmt.Errorf("transcribe: %w", err)
+		return voxerr.New(voxerr.APIError, "%s", err.Error())
 	}
-
 	ui.Info("%s %s", ui.Dim("latency"), ui.Dim(time.Since(t0).Round(time.Millisecond).String()))
 
-	// Cache the whole result, not just the text, so --json stays cacheable too.
-	encoded, err := json.Marshal(result)
-	if err != nil {
+	if durationSec == 0 {
+		durationSec = result.DurationSec
+	}
+	rec := &run.Record{
+		Meta: run.Meta{
+			SID:     sid,
+			Source:  run.Tilde(source),
+			Model:   c.Model,
+			Vocab:   args.Vocab,
+			Lang:    c.Lang,
+			Created: time.Now().UTC(),
+			Path:    run.Tilde(store.Dir(sid)),
+			Size:    run.Measure(result, durationSec),
+		},
+		Args:   args,
+		Result: result,
+	}
+	if err := store.Save(rec, audioData, format); err != nil {
 		return err
 	}
-	if cacheKey != "" && !c.NoCache {
-		os.WriteFile(asrCachePath(cfg.Dir, cacheKey), encoded, 0644)
-	}
-
-	return emitResult(encoded, c.JSON)
+	return printEnvelope(rec)
 }
 
-func emitResult(encoded []byte, asJSON bool) error {
-	var result dashscope.ASRResult
-	if err := json.Unmarshal(encoded, &result); err != nil {
-		return err
-	}
-	if asJSON {
-		pretty, err := json.MarshalIndent(result, "", "  ")
+// acquire returns the audio bytes, its container format, and a source label.
+func (c *HearCmd) acquire() (data []byte, format, source string, err error) {
+	if c.File != "" {
+		data, err = os.ReadFile(c.File)
 		if err != nil {
-			return err
+			return nil, "", "", voxerr.New(voxerr.AudioUnsupported, "cannot read %s: %v", c.File, err)
 		}
-		fmt.Println(string(pretty))
-		return nil
+		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(c.File)), ".")
+		if format == "" {
+			return nil, "", "", voxerr.New(voxerr.AudioUnsupported,
+				"cannot infer the audio format of %s", c.File).
+				WithHint("rename the file with its extension, e.g. .wav or .m4a")
+		}
+		abs, _ := filepath.Abs(c.File)
+		return data, format, abs, nil
 	}
-	// Plain transcript on stdout so it stays pipeable.
-	fmt.Println(result.Text)
+
+	ui.Info("Recording for %ds... %s", c.Duration, ui.Dim("(speak now)"))
+	recorder, err := audio.NewRecorder(asrSampleRate, 1)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("init recorder: %w", err)
+	}
+	if err := recorder.Start(); err != nil {
+		return nil, "", "", fmt.Errorf("start recording: %w", err)
+	}
+	time.Sleep(time.Duration(c.Duration) * time.Second)
+	pcm := recorder.Stop()
+	ui.Info("%s %s", ui.Dim("recorded"), ui.Dim(fmt.Sprintf("%d bytes", len(pcm))))
+
+	return wrapPCMAsWAVWithRate(pcm, asrSampleRate), "wav", "mic", nil
+}
+
+// checkLimits rejects oversized audio locally. The server would reject it too,
+// but only after the upload — and its message says nothing about what to do.
+func checkLimits(bytes, durationSec int) error {
+	if bytes > dashscope.MaxAudioBytes {
+		return voxerr.New(voxerr.AudioTooLarge, "audio is %.1fMB, over the %dMB request limit",
+			float64(bytes)/(1024*1024), dashscope.MaxAudioBytes/(1024*1024)).
+			WithHint("split the file, or downmix it to 16kHz mono")
+	}
+	if durationSec > dashscope.MaxAudioSeconds {
+		return voxerr.New(voxerr.AudioTooLarge, "audio is %ds, over the %ds limit for this model",
+			durationSec, dashscope.MaxAudioSeconds).
+			WithHint("split the file into segments under %d minutes", dashscope.MaxAudioSeconds/60)
+	}
 	return nil
 }
 
-func parseHotwords(raw []string) (map[string]int, error) {
-	if len(raw) == 0 {
-		return nil, nil
+// sampleRateFor only claims a rate for audio vox recorded itself.
+func sampleRateFor(file string) int {
+	if file == "" {
+		return asrSampleRate
 	}
-	vocabulary := make(map[string]int, len(raw))
-	for _, item := range raw {
-		word, weightStr, ok := strings.Cut(item, "=")
-		if !ok {
-			return nil, fmt.Errorf("hotword %q must be word=weight", item)
-		}
-		weight, err := strconv.Atoi(weightStr)
-		if err != nil {
-			return nil, fmt.Errorf("hotword %q: weight must be a number", item)
-		}
-		// Weight is [1,5], or the magic 50 for a "super" hotword.
-		if (weight < 1 || weight > 5) && weight != 50 {
-			return nil, fmt.Errorf("hotword %q: weight must be 1-5, or 50 for a super hotword", item)
-		}
-		vocabulary[word] = weight
-	}
-	return vocabulary, nil
+	return 0
 }
 
-// asrCacheKey covers everything that changes the transcript, so switching model
-// or hints does not serve a stale result.
-func asrCacheKey(audioData []byte, opt dashscope.ASROptions) string {
-	h := sha256.New()
-	h.Write(audioData)
-	fingerprint, _ := json.Marshal(opt)
-	h.Write(fingerprint)
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func asrCachePath(dir, key string) string {
-	return filepath.Join(dir, "cache", "asr-"+key+".json")
+// printEnvelope writes the run's YAML envelope, inlining a short transcript and
+// folding a long one behind an export hint.
+func printEnvelope(rec *run.Record) error {
+	if rec.Meta.Size.Tokens <= foldTokens {
+		return emitYAML(struct {
+			run.Meta `yaml:",inline"`
+			Text     string `yaml:"text"`
+		}{rec.Meta, rec.Result.Text})
+	}
+	return emitYAML(struct {
+		Vox      []string `yaml:"$vox"`
+		run.Meta `yaml:",inline"`
+		Preview  string `yaml:"preview"`
+	}{
+		Vox: []string{fmt.Sprintf(
+			"Transcript folded at %d tokens. Read it with `vox export %s --format md`.",
+			foldTokens, rec.Meta.SID)},
+		Meta:    rec.Meta,
+		Preview: run.Preview(rec.Result.Text, previewRunes),
+	})
 }
 
 // wrapPCMAsWAVWithRate wraps raw PCM 16-bit mono data in a WAV container at the given sample rate

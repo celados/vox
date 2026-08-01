@@ -9,18 +9,26 @@ import (
 // Non-realtime ASR models sharing the multimodal-generation endpoint and schema.
 // https://help.aliyun.com/zh/model-studio/non-real-time-speech-recognition-for-fun-asr-flash
 const (
-	ModelQwenAudioASRFlash = "qwen-audio-3.0-asr-flash"
 	ModelFunASRFlash       = "fun-asr-flash-2026-06-15"
+	ModelQwenAudioASRFlash = "qwen-audio-3.0-asr-flash"
 
 	multimodalGenPath = "/services/aigc/multimodal-generation/generation"
 
-	// The endpoint caps a single request at 10MB of audio; base64 inflates by ~4/3,
-	// so check the raw bytes and fail before paying for the encode + upload.
-	maxAudioBytes = 10 * 1024 * 1024
+	// MaxAudioBytes is the endpoint's per-request cap. base64 inflates by ~4/3,
+	// so callers check raw bytes and fail before paying for the encode + upload.
+	MaxAudioBytes = 10 * 1024 * 1024
+	// MaxAudioSeconds is the documented duration cap for this non-realtime path.
+	MaxAudioSeconds = 300
 )
 
-// ASRModels lists the selectable model IDs, in preference order.
-var ASRModels = []string{ModelQwenAudioASRFlash, ModelFunASRFlash}
+// ASRModels lists the selectable model IDs; the first is the default.
+var ASRModels = []string{ModelFunASRFlash, ModelQwenAudioASRFlash}
+
+// SuperHotwordsSupported reports whether the model honours weight=50. Fun-ASR
+// does not, so a shared vocabulary is clamped rather than rejected.
+func SuperHotwordsSupported(model string) bool {
+	return model == ModelQwenAudioASRFlash
+}
 
 type ASROptions struct {
 	Model  string
@@ -30,9 +38,10 @@ type ASROptions struct {
 	// Context carries prior turns or domain word lists (input_text). The API keeps
 	// the most recent 5 entries and truncates past 400 chars per round.
 	Context []string
-	// Vocabulary maps hotword → weight [1,5], or 50 for a "super" hotword.
-	// qwen-audio-3.0-asr-flash only; Fun-ASR rejects it.
-	Vocabulary map[string]int
+	// VocabularyID references a precompiled hotword list. It must have been
+	// created with target_model equal to Model — a mismatch is not an error
+	// server-side, the hotwords just silently do nothing.
+	VocabularyID string
 	// LanguageHints are BCP-47-ish codes ("zh", "en"). Qwen honours up to 4,
 	// Fun-ASR only the first. Empty means auto-detect.
 	LanguageHints []string
@@ -55,16 +64,10 @@ type ASRResult struct {
 // Transcribe runs non-streaming recognition over a complete audio file.
 func (c *Client) Transcribe(audioData []byte, opt ASROptions) (*ASRResult, error) {
 	if opt.Model == "" {
-		opt.Model = ModelQwenAudioASRFlash
+		opt.Model = ModelFunASRFlash
 	}
 	if opt.Format == "" {
 		return nil, fmt.Errorf("audio format is required")
-	}
-	if len(audioData) > maxAudioBytes {
-		return nil, fmt.Errorf("audio is %.1fMB, over the %dMB limit", float64(len(audioData))/(1024*1024), maxAudioBytes/(1024*1024))
-	}
-	if len(opt.Vocabulary) > 0 && opt.Model != ModelQwenAudioASRFlash {
-		return nil, fmt.Errorf("instant hotwords are only supported by %s", ModelQwenAudioASRFlash)
 	}
 
 	audioURI := "data:" + mimeForFormat(opt.Format) + ";base64," + base64.StdEncoding.EncodeToString(audioData)
@@ -91,8 +94,8 @@ func (c *Client) Transcribe(audioData []byte, opt ASROptions) (*ASRResult, error
 	if opt.SampleRate > 0 {
 		params["sample_rate"] = fmt.Sprint(opt.SampleRate)
 	}
-	if len(opt.Vocabulary) > 0 {
-		params["vocabulary"] = opt.Vocabulary
+	if opt.VocabularyID != "" {
+		params["vocabulary_id"] = opt.VocabularyID
 	}
 	if len(opt.LanguageHints) > 0 {
 		params["language_hints"] = opt.LanguageHints
