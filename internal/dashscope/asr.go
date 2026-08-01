@@ -21,8 +21,40 @@ const (
 	MaxAudioSeconds = 300
 )
 
-// ASRModels lists the selectable model IDs; the first is the default.
-var ASRModels = []string{ModelFunASRFlash, ModelQwenAudioASRFlash}
+// Family pairs the two endpoints a caller never has to choose between. `hear`
+// selects the member by duration, so `--model` names a family, not an endpoint.
+type Family struct {
+	Name string
+	// Short is the synchronous model: 5 minutes, no native segmentation.
+	Short string
+	// Long is the async filetrans model: 12 hours, native sentences.
+	Long string
+}
+
+var (
+	FamilyFunASR = Family{Name: "fun-asr", Short: ModelFunASRFlash, Long: ModelFunASR}
+	FamilyQwen   = Family{Name: "qwen-asr", Short: ModelQwenAudioASRFlash, Long: ModelQwenAudioFile}
+)
+
+// Families lists the selectable families; the first is the default.
+var Families = []Family{FamilyFunASR, FamilyQwen}
+
+func FamilyByName(name string) (Family, bool) {
+	for _, f := range Families {
+		if f.Name == name {
+			return f, true
+		}
+	}
+	return Family{}, false
+}
+
+func FamilyNames() []string {
+	names := make([]string, 0, len(Families))
+	for _, f := range Families {
+		names = append(names, f.Name)
+	}
+	return names
+}
 
 // SuperHotwordsSupported reports whether the model honours weight=50. Fun-ASR
 // does not, so a shared vocabulary is clamped rather than rejected.
@@ -52,14 +84,42 @@ type ASRWord struct {
 	BeginTime   int    `json:"begin_time"`
 	EndTime     int    `json:"end_time"`
 	Punctuation string `json:"punctuation"`
+	// Confidence is only reported by the async transport.
+	Confidence float64 `json:"confidence,omitempty"`
+}
+
+// Sentence is the unit both transports normalize to. The async transport
+// segments natively; the synchronous one returns a single sentence spanning the
+// whole take, so downstream code never branches on transport.
+type Sentence struct {
+	BeginTime int    `json:"begin_time"`
+	EndTime   int    `json:"end_time"`
+	Text      string `json:"text"`
+	// Speaker is set only when diarization was requested.
+	Speaker string    `json:"speaker,omitempty"`
+	Words   []ASRWord `json:"words,omitempty"`
 }
 
 type ASRResult struct {
-	Text  string    `json:"text"`
-	Words []ASRWord `json:"words,omitempty"`
+	Text      string     `json:"text"`
+	Sentences []Sentence `json:"sentences,omitempty"`
 	// DurationSec is the billed audio duration reported by the service.
 	DurationSec int `json:"duration_sec,omitempty"`
 }
+
+// Words flattens the sentences, for consumers that want a single stream.
+func (r *ASRResult) Words() []ASRWord {
+	var words []ASRWord
+	for _, s := range r.Sentences {
+		words = append(words, s.Words...)
+	}
+	return words
+}
+
+// Segmented reports whether the service supplied real sentence boundaries. The
+// synchronous transport yields exactly one sentence covering everything, which
+// is not segmentation and must not be treated as subtitle cues.
+func (r *ASRResult) Segmented() bool { return len(r.Sentences) > 1 }
 
 // Transcribe runs non-streaming recognition over a complete audio file.
 func (c *Client) Transcribe(audioData []byte, opt ASROptions) (*ASRResult, error) {
@@ -119,11 +179,17 @@ func (c *Client) Transcribe(audioData []byte, opt ASROptions) (*ASRResult, error
 	text, _ := output["text"].(string)
 
 	result := &ASRResult{Text: text}
-	if sentence, ok := output["sentence"].(map[string]any); ok {
-		if text == "" {
-			result.Text, _ = sentence["text"].(string)
+	if raw, ok := output["sentence"].(map[string]any); ok {
+		// One sentence spanning the whole take — this endpoint does not segment.
+		sentence := Sentence{
+			BeginTime: toInt(raw["begin_time"]),
+			EndTime:   toInt(raw["end_time"]),
 		}
-		if words, ok := sentence["words"].([]any); ok {
+		sentence.Text, _ = raw["text"].(string)
+		if text == "" {
+			result.Text = sentence.Text
+		}
+		if words, ok := raw["words"].([]any); ok {
 			for _, w := range words {
 				m, ok := w.(map[string]any)
 				if !ok {
@@ -134,15 +200,18 @@ func (c *Client) Transcribe(audioData []byte, opt ASROptions) (*ASRResult, error
 				word.Punctuation, _ = m["punctuation"].(string)
 				word.BeginTime = toInt(m["begin_time"])
 				word.EndTime = toInt(m["end_time"])
-				result.Words = append(result.Words, word)
+				sentence.Words = append(sentence.Words, word)
 			}
+		}
+		if sentence.Text != "" || len(sentence.Words) > 0 {
+			result.Sentences = []Sentence{sentence}
 		}
 	}
 	if usage, ok := resp["usage"].(map[string]any); ok {
 		result.DurationSec = toInt(usage["duration"])
 	}
 
-	if result.Text == "" && len(result.Words) == 0 {
+	if result.Text == "" && len(result.Sentences) == 0 {
 		return nil, fmt.Errorf("unexpected response: no transcript in output")
 	}
 	return result, nil

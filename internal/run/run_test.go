@@ -22,11 +22,12 @@ func TestSIDIsStableAndArgSensitive(t *testing.T) {
 
 	// Every field in Args must re-key the run.
 	variants := map[string]Args{
-		"model":   {Model: dashscope.ModelQwenAudioASRFlash, Lang: []string{"zh"}},
-		"lang":    {Model: dashscope.ModelFunASRFlash, Lang: []string{"en"}},
-		"vocab":   {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Vocab: "abcd1234"},
-		"context": {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Context: []string{"DashScope"}},
-		"format":  {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Format: "mp3"},
+		"model":    {Model: dashscope.ModelQwenAudioASRFlash, Lang: []string{"zh"}},
+		"lang":     {Model: dashscope.ModelFunASRFlash, Lang: []string{"en"}},
+		"vocab":    {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Vocab: "abcd1234"},
+		"speakers": {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Speakers: true},
+		"context":  {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Context: []string{"DashScope"}},
+		"format":   {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Format: "mp3"},
 	}
 	for name, args := range variants {
 		if SID(Digest(audio, args)) == first {
@@ -41,8 +42,10 @@ func TestSIDIsStableAndArgSensitive(t *testing.T) {
 
 func TestMeasureCountsCJKAndLatin(t *testing.T) {
 	result := &dashscope.ASRResult{
-		Text:  "你好world",
-		Words: []dashscope.ASRWord{{Text: "你好"}, {Text: "world"}},
+		Text: "你好world",
+		Sentences: []dashscope.Sentence{{
+			Words: []dashscope.ASRWord{{Text: "你好"}, {Text: "world"}},
+		}},
 	}
 	size := Measure(result, 42)
 

@@ -6,7 +6,7 @@ description: >
   agent-facing STT/TTS tool. Runs are content-addressed; everything after
   transcription is an operation on a stored run.
 status: draft # draft | accepted | superseded
-version: 0.3
+version: 0.4
 generated: { by: claude/opus-5, at: 2026-08-01T00:00:00Z }
 ---
 
@@ -15,7 +15,7 @@ generated: { by: claude/opus-5, at: 2026-08-01T00:00:00Z }
 The implementation is API calls. The design work is here: what the commands
 are, what they print, and what state they leave behind.
 
-Three invariants the whole surface is built on:
+Four invariants the whole surface is built on:
 
 1. **Content-addressed runs.** `sid = short_hash(audio, recognition args)`. The
    same input always yields the same `sid`, and a repeated call costs zero API
@@ -26,6 +26,10 @@ Three invariants the whole surface is built on:
 3. **Index out, content out — never both.** `hear`, `session ls` and `vocab ls`
    emit a YAML index on stdout. `export` emits the document itself. Human
    progress goes to stderr. There are no `--json` / `--sid` output-mode flags.
+4. **Length is the tool's problem, not the caller's.** The backend exposes two
+   recognition APIs with very different limits. `hear` picks between them from
+   the audio's duration. A caller never chooses a transport, never splits a
+   file, and never learns that a five-minute cliff exists.
 
 ## Schema
 
@@ -50,13 +54,17 @@ type Vox = {
 
   /**
    * Transcribe audio into a run. Idempotent: an existing sid returns the stored
-   * record without calling the API. Duration and size are checked locally
-   * before upload — over the limit is audio_too_large, not a server rejection.
+   * record without calling the API.
+   *
+   * The transport is chosen from the audio's duration, not by the caller:
+   * short takes go to the synchronous endpoint, long ones are uploaded and
+   * transcribed asynchronously. See Recognition transports.
    *
    * stdout: the run's YAML envelope (see Output contract)
    *
    * @example
    * vox hear meeting.m4a
+   * vox hear lecture.mp3 --speakers      # 45 minutes is an ordinary input
    * vox hear meeting.m4a --vocab meeting --lang zh
    * vox hear --mic --duration 10
    */
@@ -64,10 +72,11 @@ type Vox = {
     file?: string          // positional; omit with --mic
     mic?: boolean          // record from the default input device
     duration?: number      // --mic only, seconds (default 5)
-    model?: string         // fun-asr-flash-2026-06-15 (default) | qwen-audio-3.0-asr-flash
+    model?: string         // family, not endpoint: fun-asr (default) | qwen-asr
     vocab?: string         // vocabulary name under ~/.vox/vocabulary/<name>.yaml
     lang?: string[]        // language hints; auto-detect when unset
-    context?: string[]     // prompt context, max 5 entries / 400 chars per round
+    context?: string[]     // prompt context; short transport only
+    speakers?: boolean     // diarization; long transport only, ≤2h recommended
     refresh?: boolean      // re-recognize and overwrite the stored run
   })
 
@@ -158,6 +167,36 @@ run — a key→artifact map with no metadata and no index — and it exists onl
 because TTS has not been moved onto runs yet. When `say` gets the same
 content-addressed treatment, the `cache` group disappears into `session`.
 
+## Recognition transports
+
+The backend is two APIs, not one, and their limits differ by two orders of
+magnitude. `hear` routes on duration; `--model` selects a *family*, and the
+family's short and long members are both used as needed.
+
+| | short | long |
+| --- | --- | --- |
+| Trigger | ≤ 5 min **and** ≤ 10MB | anything above |
+| Model (`fun-asr` family) | `fun-asr-flash-2026-06-15` | `fun-asr` |
+| Model (`qwen-asr` family) | `qwen-audio-3.0-asr-flash` | `qwen-audio-3.0-asr-flash-filetrans` |
+| Endpoint | `multimodal-generation/generation` | `audio/asr/transcription` |
+| Call | synchronous, base64 inline | upload → submit → poll `tasks/{id}` |
+| Cap | 5 min / 10MB | **12 h / 2GB** |
+| Sentences | none — one blob per take | **native, timestamped** |
+| Extras | prompt context | `confidence`, diarization |
+| Latency | ~1 s | ~1 min per 45 min of audio |
+
+The long path needs a URL: `file_urls` accepts no local upload and no base64.
+Model Studio's free temporary storage bridges that — `GET /uploads?action=getPolicy`,
+a form POST to the returned OSS host, then an `oss://` URL that lives 48 hours
+and is passed with `X-DashScope-OssResourceResolve: enable`. No bucket of our
+own, no credentials beyond the API key.
+
+**Do not reach for client-side chunking.** It was measured against the long path
+on the same 45-minute file and lost outright: splitting truncates the word at
+every cut (a hotword cannot recover audio that was removed), it multiplies calls,
+and it forfeits native sentence segmentation. Chunking remains justified only if
+a file exceeds the long path's own 12-hour cap.
+
 ## Output contract
 
 | Stream | Carries |
@@ -225,7 +264,7 @@ output".
   runs/<sid>/
     meta.yaml                    the envelope: source, args, size, created_at
     audio.<ext>                  the source audio, copied in
-    run.json                     model, vocabulary snapshot, text, words[], usage
+    run.json                     transport, model, text, sentences[], usage
   vocabulary/
     <name>.yaml                  source of truth, hand- or agent-edited
     .index.json                  name → { model → { vocabulary_id, content_hash, synced_at } }
@@ -301,10 +340,26 @@ The index is written through a temp file and rename. A corrupt index is
 `vocab_index_corrupt`, never an empty one: treating it as empty would make
 `prune` consider nothing claimed and delete every list on the account.
 
+Both transports normalize into one stored shape: `text` plus `sentences[]`, each
+sentence carrying `begin_time`, `end_time`, optional `speaker`, and `words[]`.
+The short transport yields exactly one sentence; the long one yields many. Every
+export reads that shape and never branches on transport.
+
+Subtitle cues therefore come from native sentences whenever they exist. The
+client-side splitter — punctuation and inter-word gaps — is the fallback for the
+short transport only, where the service supplies no segmentation at all.
+
 ## Verified behaviour
 
 Measured 2026-08-01 against the live API; these decide the shape above.
 
+- **The long transport is not a fallback; it is better.** The same 45-minute
+  file: one call, ~50s wall clock, 440 native sentences. Client-side chunking of
+  the same file needed 10 calls, truncated the word at every cut, and produced
+  worse cues (922 with 19 runts, against 861 with 11).
+- **`language_hints` matters more than the transport.** A term the flash model
+  missed came back correct on the async path *with* `-l zh` and wrong without
+  it. Attribute recognition wins to the hint, not to the endpoint.
 - **Precompiled vocabularies work on `fun-asr-flash-2026-06-15`.** The model
   list page claims otherwise; the hotword page and the API agree it works.
   Baseline `别连语音识别测试，funASR和昆都要跑通。` → with vocabulary
@@ -332,20 +387,14 @@ Sources:
   (`sid = hash(text, voice, params)` → a stable audio path), collapsing the tool
   to a single "stable id + idempotent" concept. Not decided; `say` is specified
   above in its current form.
-- **Long audio.** The non-realtime endpoint caps at 5 minutes / 10MB, so `hear`
-  pre-checks and refuses. That refusal is the honest end state until we pick a
-  path: `fun-asr` (12h, async filetrans, a different schema) or client-side
-  chunking with run-level merge. The run model carries the intermediate state
-  either way.
-
 - **Envelope fold threshold.** Written as 2000 tokens. It only needs to be small
   enough that an agent doing `hear` on an hour of audio does not get 10k tokens
   it did not ask for.
 
 - **Duration probe on non-WAV input.** WAV is parsed inline; everything else
-  needs `ffprobe`. Without it the duration is unknown, and `hear` warns and
-  enforces only the size cap rather than refusing — failing closed would make
-  every mp3 unusable on a machine without ffmpeg.
+  needs `ffprobe`. The duration now picks the transport, so an unknown duration
+  is no longer cosmetic: `hear` takes the long path, which has no practical cap
+  and costs only latency when the guess was wrong.
 
 - **Concurrent `hear` on one input.** Publication is atomic, so the stored run is
   never inconsistent, but two processes that miss simultaneously both call the

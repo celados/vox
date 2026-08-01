@@ -146,10 +146,15 @@ func Render(rec *run.Record, format string) (string, error) {
 	}
 }
 
-// cues falls back to a single whole-run cue when the service returned text
-// without word timings — an unsegmented subtitle still beats an empty file.
+// cues prefers the service's own sentence boundaries. The async transport
+// segments natively and far better than punctuation heuristics can; the
+// client-side splitter exists only for the synchronous transport, which returns
+// the whole take as one blob.
 func cues(rec *run.Record) []Cue {
-	if segmented := Segment(rec.Result.Words); len(segmented) > 0 {
+	if rec.Result.Segmented() {
+		return fromSentences(rec.Result.Sentences)
+	}
+	if segmented := Segment(rec.Result.Words()); len(segmented) > 0 {
 		return segmented
 	}
 	if strings.TrimSpace(rec.Result.Text) == "" {
@@ -161,6 +166,40 @@ func cues(rec *run.Record) []Cue {
 		End:   time.Duration(rec.Meta.Size.Duration) * time.Second,
 		Text:  rec.Result.Text,
 	}}
+}
+
+// fromSentences turns native sentences into cues, splitting only the ones that
+// exceed the line budget — the service occasionally emits a 20-second run-on.
+func fromSentences(sentences []dashscope.Sentence) []Cue {
+	var cues []Cue
+	for _, s := range sentences {
+		text := strings.TrimSpace(s.Text)
+		if text == "" {
+			continue
+		}
+		if s.Speaker != "" {
+			text = "[" + s.Speaker + "] " + text
+		}
+		if len([]rune(text)) <= maxCueRunes && time.Duration(s.EndTime-s.BeginTime)*time.Millisecond <= maxCueDuration {
+			cues = append(cues, Cue{
+				Index: len(cues) + 1,
+				Begin: time.Duration(s.BeginTime) * time.Millisecond,
+				End:   time.Duration(s.EndTime) * time.Millisecond,
+				Text:  text,
+			})
+			continue
+		}
+		// Too long for one cue: fall back to the word-level splitter, which has
+		// the timings needed to divide it, then re-number.
+		for _, cue := range Segment(s.Words) {
+			cue.Index = len(cues) + 1
+			if s.Speaker != "" && len(cues) == 0 {
+				cue.Text = "[" + s.Speaker + "] " + cue.Text
+			}
+			cues = append(cues, cue)
+		}
+	}
+	return cues
 }
 
 // frontmatter is marshalled rather than formatted: a source path containing a
@@ -197,18 +236,18 @@ func renderMarkdown(rec *run.Record) string {
 	b.Write(head)
 	b.WriteString("---\n\n")
 
-	segmented := Segment(rec.Result.Words)
-	if len(segmented) == 0 {
-		// No word timings: the transcript is still the point of the document.
+	units := cues(rec)
+	if len(units) == 0 {
+		// No timings at all: the transcript is still the point of the document.
 		b.WriteString(strings.TrimSpace(rec.Result.Text))
 		b.WriteString("\n")
 		return b.String()
 	}
 
-	// Paragraphs follow the same cue segmentation, merged until a sentence ends,
-	// so prose stays readable instead of one wall of text.
+	// Paragraphs merge cues until a sentence ends, so prose stays readable
+	// instead of becoming one line per subtitle.
 	var para strings.Builder
-	for _, cue := range segmented {
+	for _, cue := range units {
 		para.WriteString(cue.Text)
 		if strings.ContainsAny(lastRune(cue.Text), terminators) {
 			b.WriteString(para.String())

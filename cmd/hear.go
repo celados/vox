@@ -31,10 +31,11 @@ type HearCmd struct {
 	File     string   `arg:"" optional:"" help:"Audio file to transcribe"`
 	Mic      bool     `help:"Record from the default input device instead"`
 	Duration int      `short:"d" default:"5" help:"Recording duration in seconds (--mic only)"`
-	Model    string   `short:"m" default:"fun-asr-flash-2026-06-15" enum:"fun-asr-flash-2026-06-15,qwen-audio-3.0-asr-flash" help:"ASR model"`
+	Model    string   `short:"m" default:"fun-asr" enum:"fun-asr,qwen-asr" help:"Model family; the transport is picked from the audio length"`
 	Vocab    string   `short:"v" help:"Vocabulary name under ~/.vox/vocabulary/"`
 	Lang     []string `short:"l" help:"Language hint, e.g. zh or en (repeatable; auto-detect when unset)"`
-	Context  []string `short:"c" help:"Prompt context to improve recognition (repeatable)"`
+	Context  []string `short:"c" help:"Prompt context to improve recognition (short audio only)"`
+	Speakers bool     `help:"Label speakers (long audio only; recommended under 2 hours)"`
 	Refresh  bool     `help:"Re-recognize and overwrite the stored run"`
 }
 
@@ -49,18 +50,33 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	client := dashscope.NewClient(apiKey)
+	family, _ := dashscope.FamilyByName(c.Model)
 
 	audioData, format, source, err := c.acquire()
 	if err != nil {
 		return err
 	}
 
-	durationSec, err := audio.Duration(source, audioData)
-	if err != nil {
-		ui.Warn("duration unknown (%v); only the size limit is enforced", err)
+	durationSec, probeErr := audio.Duration(source, audioData)
+
+	// Routing: the synchronous endpoint is far faster but caps at 5 minutes and
+	// 10MB. Anything above — or anything whose length could not be measured —
+	// takes the async path, which has no practical cap and segments natively.
+	long := probeErr != nil ||
+		durationSec > dashscope.MaxAudioSeconds ||
+		len(audioData) > dashscope.MaxAudioBytes
+	model := family.Short
+	if long {
+		model = family.Long
 	}
-	if err := checkLimits(len(audioData), durationSec); err != nil {
+	if err := checkLimits(durationSec, long); err != nil {
 		return err
+	}
+	if c.Speakers && !long {
+		ui.Warn("speaker labels need the long-audio transport; ignoring --speakers")
+	}
+	if len(c.Context) > 0 && long {
+		ui.Warn("prompt context is not supported for long audio; ignoring --context")
 	}
 
 	// The vocabulary is resolved locally first: its content hash is part of the
@@ -68,16 +84,21 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	// server-side list is only reconciled on a miss.
 	var vocabulary *vocab.Vocabulary
 	args := run.Args{
-		Model:   c.Model,
-		Format:  format,
-		Lang:    normalize(c.Lang),
-		Context: normalize(c.Context),
+		Model:  model,
+		Format: format,
+		Lang:   normalize(c.Lang),
+	}
+	if !long {
+		args.Context = normalize(c.Context)
+	}
+	if c.Speakers && long {
+		args.Speakers = true
 	}
 	if c.Vocab != "" {
 		if vocabulary, err = vocab.Load(cfg.Dir, c.Vocab); err != nil {
 			return err
 		}
-		words, warnings := vocabulary.Resolve(c.Model)
+		words, warnings := vocabulary.Resolve(model)
 		for _, w := range warnings {
 			ui.Warn("%s", w)
 		}
@@ -95,9 +116,16 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 		}
 	}
 
+	if probeErr != nil {
+		ui.Warn("duration unknown (%v); taking the long-audio path", probeErr)
+	}
+
 	var vocabularyID string
 	if vocabulary != nil {
-		result, err := vocab.Sync(client, cfg.Dir, vocabulary, c.Model, false)
+		// A vocabulary is bound to one target model, and the two transports are
+		// two models — so a vocabulary used on both consumes two of the ten
+		// account slots.
+		result, err := vocab.Sync(client, cfg.Dir, vocabulary, model, false)
 		if err != nil {
 			return err
 		}
@@ -108,16 +136,27 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	t0 := time.Now()
-	ui.Info("%s %s", ui.Dim("model"), ui.Key(c.Model))
+	ui.Info("%s %s %s", ui.Dim("model"), ui.Key(model), ui.Dim(transportLabel(long, durationSec)))
 
-	result, err := client.Transcribe(audioData, dashscope.ASROptions{
-		Model:         c.Model,
-		Format:        format,
-		SampleRate:    sampleRateFor(c.File),
-		Context:       args.Context,
-		VocabularyID:  vocabularyID,
-		LanguageHints: args.Lang,
-	})
+	var result *dashscope.ASRResult
+	if long {
+		result, err = client.TranscribeFile(filepath.Base(source)+"."+format, audioData,
+			dashscope.FileOptions{
+				Model:         model,
+				VocabularyID:  vocabularyID,
+				LanguageHints: args.Lang,
+				Diarization:   args.Speakers,
+			}, taskProgress())
+	} else {
+		result, err = client.Transcribe(audioData, dashscope.ASROptions{
+			Model:         model,
+			Format:        format,
+			SampleRate:    sampleRateFor(c.File),
+			Context:       args.Context,
+			VocabularyID:  vocabularyID,
+			LanguageHints: args.Lang,
+		})
+	}
 	if err != nil {
 		return voxerr.New(voxerr.APIError, "%s", err.Error())
 	}
@@ -133,14 +172,15 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	rec := &run.Record{
 		Digest: digest,
 		Meta: run.Meta{
-			SID:     sid,
-			Source:  run.Tilde(source),
-			Model:   c.Model,
-			Vocab:   vocabLabel,
-			Lang:    args.Lang,
-			Created: time.Now().UTC(),
-			Path:    run.Tilde(store.Dir(sid)),
-			Size:    run.Measure(result, durationSec),
+			SID:       sid,
+			Source:    run.Tilde(source),
+			Model:     model,
+			Transport: transportName(long),
+			Vocab:     vocabLabel,
+			Lang:      args.Lang,
+			Created:   time.Now().UTC(),
+			Path:      run.Tilde(store.Dir(sid)),
+			Size:      run.Measure(result, durationSec),
 		},
 		Args:   args,
 		Result: result,
@@ -220,21 +260,57 @@ func normalize(values []string) []string {
 	return out
 }
 
-// checkLimits rejects oversized audio locally. The server would reject it too,
-// but only after the upload — and its message says nothing about what to do.
-// durationSec of 0 means unknown, in which case only the size cap applies.
-func checkLimits(bytes, durationSec int) error {
-	if bytes > dashscope.MaxAudioBytes {
-		return voxerr.New(voxerr.AudioTooLarge, "audio is %.1fMB, over the %dMB request limit",
-			float64(bytes)/(1024*1024), dashscope.MaxAudioBytes/(1024*1024)).
-			WithHint("split the file, or downmix it to 16kHz mono")
-	}
-	if durationSec > dashscope.MaxAudioSeconds {
-		return voxerr.New(voxerr.AudioTooLarge, "audio is %ds, over the %ds limit for this model",
-			durationSec, dashscope.MaxAudioSeconds).
-			WithHint("split the file into segments under %d minutes", dashscope.MaxAudioSeconds/60)
+// checkLimits guards only the ceiling the tool cannot route around. The short
+// transport's 5-minute cap is not an error — it is what selects the long one.
+func checkLimits(durationSec int, long bool) error {
+	if long && durationSec > dashscope.MaxFileSeconds {
+		return voxerr.New(voxerr.AudioTooLarge, "audio is %s, over the %dh limit",
+			formatSeconds(durationSec), dashscope.MaxFileSeconds/3600).
+			WithHint("split the file into parts under %d hours", dashscope.MaxFileSeconds/3600)
 	}
 	return nil
+}
+
+func transportName(long bool) string {
+	if long {
+		return "async"
+	}
+	return "sync"
+}
+
+func transportLabel(long bool, durationSec int) string {
+	if !long {
+		return ""
+	}
+	if durationSec > 0 {
+		return fmt.Sprintf("(async, %s)", formatSeconds(durationSec))
+	}
+	return "(async)"
+}
+
+func formatSeconds(sec int) string {
+	switch {
+	case sec >= 3600:
+		return fmt.Sprintf("%dh%02dm", sec/3600, sec%3600/60)
+	case sec >= 60:
+		return fmt.Sprintf("%dm%02ds", sec/60, sec%60)
+	default:
+		return fmt.Sprintf("%ds", sec)
+	}
+}
+
+// taskProgress reports the async job's state so a minutes-long transcription is
+// not silent. Every line goes to stderr; stdout stays reserved for the envelope.
+func taskProgress() dashscope.TaskProgress {
+	var last string
+	return func(status string, elapsed time.Duration) {
+		if status == last {
+			return
+		}
+		last = status
+		ui.Info("%s %s %s", ui.Dim("task"), ui.Key(strings.ToLower(status)),
+			ui.Dim(elapsed.Round(time.Second).String()))
+	}
 }
 
 // sampleRateFor only claims a rate for audio vox recorded itself.
