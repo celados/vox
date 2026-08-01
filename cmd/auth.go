@@ -1,28 +1,53 @@
 package cmd
 
 import (
+	"fmt"
+	"os"
+	"strings"
+
 	"github.com/celados/vox/internal/config"
+	"github.com/celados/vox/internal/dashscope"
 	"github.com/celados/vox/internal/ui"
+	"golang.org/x/term"
 )
 
 type AuthCmd struct {
 	Login  AuthLoginCmd  `cmd:"" help:"Save API credentials"`
+	Logout AuthLogoutCmd `cmd:"" help:"Clear stored credentials"`
 	Status AuthStatusCmd `cmd:"" help:"Show current auth status"`
 }
 
 type AuthLoginCmd struct {
-	DashScope AuthLoginDashScopeCmd `cmd:"" help:"Login to DashScope (TTS/ASR)"`
-	Slack     AuthLoginSlackCmd     `cmd:"" help:"Login to Slack (listen mode)"`
+	// Without the explicit name kong would derive "dash-scope".
+	DashScope AuthLoginDashScopeCmd `cmd:"" name:"dashscope" help:"Login to DashScope (TTS/ASR)"`
 }
 
 // --- dashscope ---
 
 type AuthLoginDashScopeCmd struct {
-	Token string `required:"" help:"DashScope API key"`
+	// Optional so the key can be entered interactively and stay out of shell history.
+	Token string `help:"DashScope API key (prompted when omitted)"`
 }
 
 func (c *AuthLoginDashScopeCmd) Run(cfg *config.AppConfig) error {
-	cfg.Config.Services.DashScope.APIKey = c.Token
+	token := strings.TrimSpace(c.Token)
+	if token == "" {
+		var err error
+		token, err = promptSecret("DashScope API Key: ")
+		if err != nil {
+			return err
+		}
+	}
+	if token == "" {
+		return fmt.Errorf("API key is required")
+	}
+
+	ui.Info("%s", ui.Dim("validating..."))
+	if err := dashscope.NewClient(token).Validate(); err != nil {
+		return fmt.Errorf("invalid credentials: %w", err)
+	}
+
+	cfg.Config.Services.DashScope.APIKey = token
 	if err := cfg.SaveConfig(); err != nil {
 		return err
 	}
@@ -30,20 +55,19 @@ func (c *AuthLoginDashScopeCmd) Run(cfg *config.AppConfig) error {
 	return nil
 }
 
-// --- slack ---
+// --- logout ---
 
-type AuthLoginSlackCmd struct {
-	BotToken string `required:"" help:"Slack Bot Token (xoxb-...)"`
-	AppToken string `required:"" help:"Slack App-Level Token (xapp-...)"`
-}
+type AuthLogoutCmd struct{}
 
-func (c *AuthLoginSlackCmd) Run(cfg *config.AppConfig) error {
-	cfg.Config.Services.Slack.BotToken = c.BotToken
-	cfg.Config.Services.Slack.AppToken = c.AppToken
-	if err := cfg.SaveConfig(); err != nil {
+func (c *AuthLogoutCmd) Run(cfg *config.AppConfig) error {
+	if cfg.Config.Services.DashScope.APIKey == "" {
+		ui.Warn("No credentials stored")
+		return nil
+	}
+	if err := cfg.ClearCredentials(); err != nil {
 		return err
 	}
-	ui.Success("Authenticated with %s", ui.Key("slack"))
+	ui.Success("Credentials cleared")
 	return nil
 }
 
@@ -52,28 +76,31 @@ func (c *AuthLoginSlackCmd) Run(cfg *config.AppConfig) error {
 type AuthStatusCmd struct{}
 
 func (c *AuthStatusCmd) Run(cfg *config.AppConfig) error {
-	any := false
-
-	if key := cfg.Config.Services.DashScope.APIKey; key != "" {
-		any = true
-		ui.Success("dashscope")
-		ui.KV("  API Key", maskToken(key))
-	}
-
-	if s := cfg.Config.Services.Slack; s.BotToken != "" {
-		any = true
-		ui.Success("slack")
-		ui.KV("  Bot Token", maskToken(s.BotToken))
-		ui.KV("  App Token", maskToken(s.AppToken))
-	}
-
-	if !any {
+	key := cfg.Config.Services.DashScope.APIKey
+	if key == "" {
 		ui.Warn("No services configured")
-		ui.Info("  %s", ui.Key("vox auth login dashscope --token <key>"))
-		ui.Info("  %s", ui.Key("vox auth login slack --bot-token <token> --app-token <token>"))
+		ui.Info("  %s", ui.Key("vox auth login dashscope"))
+		return nil
 	}
 
+	ui.Success("dashscope")
+	ui.KV("  API Key", maskToken(key))
 	return nil
+}
+
+// promptSecret reads a secret from the terminal without echoing it.
+func promptSecret(label string) (string, error) {
+	fd := int(os.Stdin.Fd())
+	if !term.IsTerminal(fd) {
+		return "", fmt.Errorf("no terminal available — pass --token instead")
+	}
+	fmt.Fprint(os.Stderr, label)
+	b, err := term.ReadPassword(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return "", fmt.Errorf("read secret: %w", err)
+	}
+	return strings.TrimSpace(string(b)), nil
 }
 
 func maskToken(t string) string {

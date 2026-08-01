@@ -5,7 +5,7 @@ description: Voice I/O — speak text aloud with TTS voice cloning, or transcrib
 
 # vox
 
-Voice I/O through the terminal. TTS with ~500ms latency, ASR with ~1.5s latency. Powered by Qwen3-TTS and Qwen3-ASR via DashScope API. Supports system voices and user-cloned voices.
+Voice I/O through the terminal. TTS with ~500ms latency, ASR with ~1s latency. Powered by Qwen3-TTS and Model Studio ASR (Qwen-Audio-3.0 / Fun-ASR) via the DashScope API. Supports system voices and user-cloned voices.
 
 ## When to Use
 
@@ -50,12 +50,25 @@ vox hear
 # Record longer
 vox hear -d 10
 
-# Transcribe an existing audio file
+# Transcribe an existing audio file (format inferred from the extension)
 vox hear -f ~/recording.wav
 
 # Provide context for better recognition of domain terms
-vox hear -c "Qwen, DashScope, OnType"
+vox hear -f ~/recording.wav -c "Qwen, DashScope, OnType"
+
+# Force proper nouns with instant hotwords (weight 1-5, or 50 for a super hotword)
+vox hear -f ~/recording.wav --hotword DashScope=5 --hotword OnType=5
+
+# Pick the model — Fun-ASR is the alternative engine, no hotword support
+vox hear -f ~/recording.wav -m fun-asr-flash-2026-06-15
+
+# Word-level timestamps (subtitles, alignment)
+vox hear -f ~/recording.wav --json
 ```
+
+Models: `qwen-audio-3.0-asr-flash` (default, hotwords + up to 4 language hints)
+and `fun-asr-flash-2026-06-15` (context only, first language hint only). Both cap
+at 5 minutes / 10MB per request.
 
 ### Manage voices
 
@@ -82,8 +95,11 @@ vox voice delete <voice-id>
 # Check if authenticated
 vox auth status
 
-# Login (only needed once)
-vox auth login dashscope --token <api-key>
+# Login (only needed once; prompts for the key, validates before saving)
+vox auth login dashscope
+
+# Clear stored credentials
+vox auth logout
 ```
 
 ## Behavior

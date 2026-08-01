@@ -26,6 +26,13 @@ func NewClient(apiKey string) *Client {
 	}
 }
 
+// Validate makes the cheapest authenticated call available so `auth login` can
+// reject a bad key before storing it.
+func (c *Client) Validate() error {
+	_, err := c.ListVoices(0, 1)
+	return err
+}
+
 // EnrollVoice creates a cloned voice from audio data
 func (c *Client) EnrollVoice(name string, audioBase64 string) (string, error) {
 	body := map[string]any{
@@ -105,7 +112,9 @@ func (c *Client) DeleteVoice(voiceID string) error {
 	return err
 }
 
-func (c *Client) post(path string, body any) (map[string]any, error) {
+type header struct{ key, value string }
+
+func (c *Client) post(path string, body any, headers ...header) (map[string]any, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
@@ -117,6 +126,9 @@ func (c *Client) post(path string, body any) (map[string]any, error) {
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
+	for _, h := range headers {
+		req.Header.Set(h.key, h.value)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
