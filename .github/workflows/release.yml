@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare GitHub Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh --repo "${GITHUB_REPOSITORY}" release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists"
+          else
+            gh --repo "${GITHUB_REPOSITORY}" release create "${GITHUB_REF_NAME}" \
+              --verify-tag \
+              --title "${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+
+  # vox links miniaudio (mic capture) and oto (playback) through cgo, so every
+  # target is built natively. There is no CGO_ENABLED=0 build and no
+  # cross-compilation: darwin from an ubuntu image simply does not link.
+  macos:
+    name: Build macos-arm64
+    needs: prepare
+    # macOS is billed 10x on hosted images, so it goes to the org runner.
+    # ARM64 keeps it off the Rosetta x64 runner on the same host.
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Persistent host: the default git clean would wipe the Go build cache
+          # this runner exists to keep.
+          clean: false
+
+      - name: Prepare persistent workspace
+        run: |
+          # run: steps use a non-login shell, so $HOME toolchains need pinning.
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # A killed build can leave the tree dirty; nothing else resets it.
+          git reset --hard --quiet || true
+          git clean -fdq bin dist || true
+
+      - name: Setup Go
+        # Toolchain comes from the action rather than host state, so the job does
+        # not silently depend on what happens to be installed on the runner.
+        # cache stays off: its post step prunes on ephemeral-VM assumptions and
+        # has corrupted this host before. Local disk is already the cache.
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build archive
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          archive_root="dist/vox_macos-arm64"
+          mkdir -p "${archive_root}"
+          CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w" -o "${archive_root}/vox" .
+          tar -C dist -czf "dist/vox_${VERSION}_macos-arm64.tar.gz" vox_macos-arm64
+
+      - name: Upload archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh --repo "${GITHUB_REPOSITORY}" release upload "${GITHUB_REF_NAME}" \
+            "dist/vox_${GITHUB_REF_NAME}_macos-arm64.tar.gz" --clobber
+
+  linux:
+    name: Build linux-amd64
+    needs: prepare
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install audio headers
+        # oto links ALSA; without the headers cgo fails at compile, not at run.
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - name: Build archive
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          archive_root="dist/vox_linux-amd64"
+          mkdir -p "${archive_root}"
+          CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o "${archive_root}/vox" .
+          tar -C dist -czf "dist/vox_${VERSION}_linux-amd64.tar.gz" vox_linux-amd64
+
+      - name: Upload archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh --repo "${GITHUB_REPOSITORY}" release upload "${GITHUB_REF_NAME}" \
+            "dist/vox_${GITHUB_REF_NAME}_linux-amd64.tar.gz" --clobber
+
+  checksums:
+    name: Publish checksums
+    runs-on: ubuntu-latest
+    needs:
+      - macos
+      - linux
+
+    steps:
+      - name: Generate and upload checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh --repo "${GITHUB_REPOSITORY}" release download "${GITHUB_REF_NAME}" \
+            --pattern "vox_${GITHUB_REF_NAME}_*.tar.gz" --dir dist
+          (cd dist && sha256sum *.tar.gz > "vox_${GITHUB_REF_NAME}_checksums.txt")
+          gh --repo "${GITHUB_REPOSITORY}" release upload "${GITHUB_REF_NAME}" \
+            "dist/vox_${GITHUB_REF_NAME}_checksums.txt" --clobber
