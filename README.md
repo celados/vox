@@ -11,8 +11,18 @@ surface contract lives in [docs/cli-schema.md](docs/cli-schema.md).
 ## Install
 
 ```bash
+make link          # builds bin/vox and symlinks it into ~/.local/bin
+```
+
+`make build` alone leaves the binary in `bin/`; `make unlink` removes the
+symlink. Installing straight from the module also works:
+
+```bash
 go install github.com/celados/vox@latest
 ```
+
+Note that `go install` writes to `GOBIN`, which may sit earlier in `PATH` than
+`~/.local/bin` — `make link` warns when a copy elsewhere is still winning.
 
 `ffmpeg`/`ffprobe` are optional: `ffprobe` supplies the duration precheck for
 non-WAV input, `ffmpeg` compresses the TTS cache.
