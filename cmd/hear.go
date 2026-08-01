@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	asrSampleRate = 16000
 	// foldTokens is where the envelope stops inlining the transcript. It only
 	// needs to be small enough that transcribing an hour of audio does not hand
 	// a caller ten thousand tokens it did not ask for.
@@ -28,14 +27,11 @@ const (
 )
 
 type HearCmd struct {
-	File     string   `arg:"" optional:"" help:"Audio file to transcribe"`
-	Mic      bool     `help:"Record from the default input device instead"`
-	Duration int      `short:"d" default:"5" help:"Recording duration in seconds (--mic only)"`
-	Model    string   `short:"m" default:"fun-asr" enum:"fun-asr,qwen-asr" help:"Model family; the transport is picked from the audio length"`
+	File     string   `arg:"" help:"Audio file to transcribe"`
+	Model    string   `short:"m" default:"fun-asr" enum:"fun-asr,qwen-audio-3.0-asr-flash-filetrans" help:"ASR model"`
 	Vocab    string   `short:"v" help:"Vocabulary name under ~/.vox/vocabulary/"`
 	Lang     []string `short:"l" help:"Language hint, e.g. zh or en (repeatable; auto-detect when unset)"`
-	Context  []string `short:"c" help:"Prompt context to improve recognition (short audio only)"`
-	Speakers bool     `help:"Label speakers (long audio only; recommended under 2 hours)"`
+	Speakers bool     `help:"Label speakers (recommended under 2 hours)"`
 	Refresh  bool     `help:"Re-recognize and overwrite the stored run"`
 }
 
@@ -44,39 +40,20 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	if err != nil {
 		return err
 	}
-	if c.File == "" && !c.Mic {
-		return voxerr.New(voxerr.AudioUnsupported, "no audio given").
-			WithHint("vox hear <file>  ·  vox hear --mic")
-	}
-
 	client := dashscope.NewClient(apiKey)
-	family, _ := dashscope.FamilyByName(c.Model)
 
-	audioData, format, source, err := c.acquire()
+	audioData, format, source, err := c.read()
 	if err != nil {
 		return err
 	}
 
 	durationSec, probeErr := audio.Duration(source, audioData)
-
-	// Routing: the synchronous endpoint is far faster but caps at 5 minutes and
-	// 10MB. Anything above — or anything whose length could not be measured —
-	// takes the async path, which has no practical cap and segments natively.
-	long := probeErr != nil ||
-		durationSec > dashscope.MaxAudioSeconds ||
-		len(audioData) > dashscope.MaxAudioBytes
-	model := family.Short
-	if long {
-		model = family.Long
-	}
-	if err := checkLimits(durationSec, long); err != nil {
+	if err := checkLimits(len(audioData), durationSec); err != nil {
 		return err
 	}
-	if c.Speakers && !long {
-		ui.Warn("speaker labels need the long-audio transport; ignoring --speakers")
-	}
-	if len(c.Context) > 0 && long {
-		ui.Warn("prompt context is not supported for long audio; ignoring --context")
+	if c.Speakers && durationSec > dashscope.DiarizationMaxSeconds {
+		ui.Warn("diarization past %dh may time out rather than degrade",
+			dashscope.DiarizationMaxSeconds/3600)
 	}
 
 	// The vocabulary is resolved locally first: its content hash is part of the
@@ -84,21 +61,16 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	// server-side list is only reconciled on a miss.
 	var vocabulary *vocab.Vocabulary
 	args := run.Args{
-		Model:  model,
-		Format: format,
-		Lang:   normalize(c.Lang),
-	}
-	if !long {
-		args.Context = normalize(c.Context)
-	}
-	if c.Speakers && long {
-		args.Speakers = true
+		Model:    c.Model,
+		Format:   format,
+		Lang:     normalize(c.Lang),
+		Speakers: c.Speakers,
 	}
 	if c.Vocab != "" {
 		if vocabulary, err = vocab.Load(cfg.Dir, c.Vocab); err != nil {
 			return err
 		}
-		words, warnings := vocabulary.Resolve(model)
+		words, warnings := vocabulary.Resolve(c.Model)
 		for _, w := range warnings {
 			ui.Warn("%s", w)
 		}
@@ -115,17 +87,13 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 			return printEnvelope(rec)
 		}
 	}
-
 	if probeErr != nil {
-		ui.Warn("duration unknown (%v); taking the long-audio path", probeErr)
+		ui.Warn("duration unknown (%v); the service will report it", probeErr)
 	}
 
 	var vocabularyID string
 	if vocabulary != nil {
-		// A vocabulary is bound to one target model, and the two transports are
-		// two models — so a vocabulary used on both consumes two of the ten
-		// account slots.
-		result, err := vocab.Sync(client, cfg.Dir, vocabulary, model, false)
+		result, err := vocab.Sync(client, cfg.Dir, vocabulary, c.Model, false)
 		if err != nil {
 			return err
 		}
@@ -136,31 +104,18 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	}
 
 	t0 := time.Now()
-	ui.Info("%s %s %s", ui.Dim("model"), ui.Key(model), ui.Dim(transportLabel(long, durationSec)))
+	ui.Info("%s %s %s", ui.Dim("model"), ui.Key(c.Model), ui.Dim(formatSeconds(durationSec)))
 
-	var result *dashscope.ASRResult
-	if long {
-		result, err = client.TranscribeFile(filepath.Base(source)+"."+format, audioData,
-			dashscope.FileOptions{
-				Model:         model,
-				VocabularyID:  vocabularyID,
-				LanguageHints: args.Lang,
-				Diarization:   args.Speakers,
-			}, taskProgress())
-	} else {
-		result, err = client.Transcribe(audioData, dashscope.ASROptions{
-			Model:         model,
-			Format:        format,
-			SampleRate:    sampleRateFor(c.File),
-			Context:       args.Context,
-			VocabularyID:  vocabularyID,
-			LanguageHints: args.Lang,
-		})
-	}
+	result, err := client.TranscribeFile(filepath.Base(source), audioData, dashscope.FileOptions{
+		Model:         c.Model,
+		VocabularyID:  vocabularyID,
+		LanguageHints: args.Lang,
+		Diarization:   args.Speakers,
+	}, taskProgress())
 	if err != nil {
 		return voxerr.New(voxerr.APIError, "%s", err.Error())
 	}
-	ui.Info("%s %s", ui.Dim("latency"), ui.Dim(time.Since(t0).Round(time.Millisecond).String()))
+	ui.Info("%s %s", ui.Dim("latency"), ui.Dim(time.Since(t0).Round(time.Second).String()))
 
 	if durationSec == 0 {
 		durationSec = result.DurationSec
@@ -172,15 +127,14 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	rec := &run.Record{
 		Digest: digest,
 		Meta: run.Meta{
-			SID:       sid,
-			Source:    run.Tilde(source),
-			Model:     model,
-			Transport: transportName(long),
-			Vocab:     vocabLabel,
-			Lang:      args.Lang,
-			Created:   time.Now().UTC(),
-			Path:      run.Tilde(store.Dir(sid)),
-			Size:      run.Measure(result, durationSec),
+			SID:     sid,
+			Source:  run.Tilde(source),
+			Model:   c.Model,
+			Vocab:   vocabLabel,
+			Lang:    args.Lang,
+			Created: time.Now().UTC(),
+			Path:    run.Tilde(store.Dir(sid)),
+			Size:    run.Measure(result, durationSec),
 		},
 		Args:   args,
 		Result: result,
@@ -191,39 +145,22 @@ func (c *HearCmd) Run(cfg *config.AppConfig) error {
 	return printEnvelope(rec)
 }
 
-// acquire returns the audio bytes, its container format, and a source label.
-func (c *HearCmd) acquire() (data []byte, format, source string, err error) {
-	if c.File != "" {
-		data, err = os.ReadFile(c.File)
-		if err != nil {
-			return nil, "", "", voxerr.New(voxerr.AudioUnsupported, "cannot read %s: %v", c.File, err)
-		}
-		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(c.File)), ".")
-		// A whitelist, not just a non-empty check: the extension becomes the
-		// declared format in the request, so `notes.txt` would otherwise be
-		// uploaded as audio/txt and fail as an opaque server error.
-		if !supportedFormats[format] {
-			return nil, "", "", voxerr.New(voxerr.AudioUnsupported,
-				"%s is not a supported audio format", displayFormat(format, c.File)).
-				WithHint("supported: %s", strings.Join(formatList(), ", "))
-		}
-		abs, _ := filepath.Abs(c.File)
-		return data, format, abs, nil
-	}
-
-	ui.Info("Recording for %ds... %s", c.Duration, ui.Dim("(speak now)"))
-	recorder, err := audio.NewRecorder(asrSampleRate, 1)
+// read returns the audio bytes, its container format, and the absolute source path.
+func (c *HearCmd) read() (data []byte, format, source string, err error) {
+	data, err = os.ReadFile(c.File)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("init recorder: %w", err)
+		return nil, "", "", voxerr.New(voxerr.AudioUnsupported, "cannot read %s: %v", c.File, err)
 	}
-	if err := recorder.Start(); err != nil {
-		return nil, "", "", fmt.Errorf("start recording: %w", err)
+	format = strings.TrimPrefix(strings.ToLower(filepath.Ext(c.File)), ".")
+	// A whitelist, not just a non-empty check: an unsupported container reaches
+	// the service as an opaque failure minutes into a task.
+	if !supportedFormats[format] {
+		return nil, "", "", voxerr.New(voxerr.AudioUnsupported,
+			"%s is not a supported audio format", displayFormat(format, c.File)).
+			WithHint("supported: %s", strings.Join(formatList(), ", "))
 	}
-	time.Sleep(time.Duration(c.Duration) * time.Second)
-	pcm := recorder.Stop()
-	ui.Info("%s %s", ui.Dim("recorded"), ui.Dim(fmt.Sprintf("%d bytes", len(pcm))))
-
-	return wrapPCMAsWAVWithRate(pcm, asrSampleRate), "wav", "mic", nil
+	abs, _ := filepath.Abs(c.File)
+	return data, format, abs, nil
 }
 
 // supportedFormats are the containers the recognition API accepts.
@@ -248,8 +185,8 @@ func displayFormat(format, file string) string {
 	return "." + format
 }
 
-// normalize drops empty entries so a caller passing `-c ""` produces the same
-// run identity as one passing nothing — the API ignores them either way.
+// normalize drops empty entries so `-l ""` produces the same run identity as
+// passing nothing — the API ignores them either way.
 func normalize(values []string) []string {
 	var out []string
 	for _, v := range values {
@@ -260,10 +197,15 @@ func normalize(values []string) []string {
 	return out
 }
 
-// checkLimits guards only the ceiling the tool cannot route around. The short
-// transport's 5-minute cap is not an error — it is what selects the long one.
-func checkLimits(durationSec int, long bool) error {
-	if long && durationSec > dashscope.MaxFileSeconds {
+// checkLimits rejects audio the service cannot accept, before spending the
+// upload. A duration of 0 means unknown, in which case only the size cap applies.
+func checkLimits(bytes, durationSec int) error {
+	if bytes > dashscope.MaxFileBytes {
+		return voxerr.New(voxerr.AudioTooLarge, "audio is %.1fGB, over the %dGB limit",
+			float64(bytes)/(1024*1024*1024), dashscope.MaxFileBytes/(1024*1024*1024)).
+			WithHint("re-encode it, or split it")
+	}
+	if durationSec > dashscope.MaxFileSeconds {
 		return voxerr.New(voxerr.AudioTooLarge, "audio is %s, over the %dh limit",
 			formatSeconds(durationSec), dashscope.MaxFileSeconds/3600).
 			WithHint("split the file into parts under %d hours", dashscope.MaxFileSeconds/3600)
@@ -271,25 +213,10 @@ func checkLimits(durationSec int, long bool) error {
 	return nil
 }
 
-func transportName(long bool) string {
-	if long {
-		return "async"
-	}
-	return "sync"
-}
-
-func transportLabel(long bool, durationSec int) string {
-	if !long {
-		return ""
-	}
-	if durationSec > 0 {
-		return fmt.Sprintf("(async, %s)", formatSeconds(durationSec))
-	}
-	return "(async)"
-}
-
 func formatSeconds(sec int) string {
 	switch {
+	case sec == 0:
+		return ""
 	case sec >= 3600:
 		return fmt.Sprintf("%dh%02dm", sec/3600, sec%3600/60)
 	case sec >= 60:
@@ -299,8 +226,8 @@ func formatSeconds(sec int) string {
 	}
 }
 
-// taskProgress reports the async job's state so a minutes-long transcription is
-// not silent. Every line goes to stderr; stdout stays reserved for the envelope.
+// taskProgress reports the job's state so a minutes-long transcription is not
+// silent. Every line goes to stderr; stdout stays reserved for the envelope.
 func taskProgress() dashscope.TaskProgress {
 	var last string
 	return func(status string, elapsed time.Duration) {
@@ -311,14 +238,6 @@ func taskProgress() dashscope.TaskProgress {
 		ui.Info("%s %s %s", ui.Dim("task"), ui.Key(strings.ToLower(status)),
 			ui.Dim(elapsed.Round(time.Second).String()))
 	}
-}
-
-// sampleRateFor only claims a rate for audio vox recorded itself.
-func sampleRateFor(file string) int {
-	if file == "" {
-		return asrSampleRate
-	}
-	return 0
 }
 
 // printEnvelope writes the run's YAML envelope, inlining a short transcript and
@@ -341,30 +260,4 @@ func printEnvelope(rec *run.Record) error {
 		Meta:    rec.Meta,
 		Preview: run.Preview(rec.Result.Text, previewRunes),
 	})
-}
-
-// wrapPCMAsWAVWithRate wraps raw PCM 16-bit mono data in a WAV container at the given sample rate
-func wrapPCMAsWAVWithRate(pcm []byte, sampleRate int) []byte {
-	dataLen := uint32(len(pcm))
-	fileLen := dataLen + 36
-	sr := uint32(sampleRate)
-	br := sr * 2 // 16-bit mono
-
-	header := []byte{
-		'R', 'I', 'F', 'F',
-		byte(fileLen), byte(fileLen >> 8), byte(fileLen >> 16), byte(fileLen >> 24),
-		'W', 'A', 'V', 'E',
-		'f', 'm', 't', ' ',
-		16, 0, 0, 0,
-		1, 0, // PCM
-		1, 0, // mono
-		byte(sr), byte(sr >> 8), byte(sr >> 16), byte(sr >> 24),
-		byte(br), byte(br >> 8), byte(br >> 16), byte(br >> 24),
-		2, 0, // block align
-		16, 0, // bits per sample
-		'd', 'a', 't', 'a',
-		byte(dataLen), byte(dataLen >> 8), byte(dataLen >> 16), byte(dataLen >> 24),
-	}
-
-	return append(header, pcm...)
 }

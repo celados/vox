@@ -22,7 +22,7 @@ func fixture() *Vocabulary {
 }
 
 func TestResolveAppliesDefaultWeight(t *testing.T) {
-	words, _ := fixture().Resolve(dashscope.ModelFunASRFlash)
+	words, _ := fixture().Resolve(dashscope.ModelFunASR)
 	byText := map[string]int{}
 	for _, w := range words {
 		byText[w.Text] = w.Weight
@@ -41,7 +41,7 @@ func TestResolveClampsSuperWeightOnFunASR(t *testing.T) {
 	v := fixture()
 	v.File.Words["Qwen"] = weight(SuperWeight)
 
-	words, warnings := v.Resolve(dashscope.ModelFunASRFlash)
+	words, warnings := v.Resolve(dashscope.ModelFunASR)
 	for _, w := range words {
 		if w.Text == "Qwen" && w.Weight != 5 {
 			t.Errorf("clamped weight = %d, want 5", w.Weight)
@@ -51,7 +51,7 @@ func TestResolveClampsSuperWeightOnFunASR(t *testing.T) {
 		t.Error("clamping must warn")
 	}
 
-	words, _ = v.Resolve(dashscope.ModelQwenAudioASRFlash)
+	words, _ = v.Resolve(dashscope.ModelQwenAudioFile)
 	for _, w := range words {
 		if w.Text == "Qwen" && w.Weight != SuperWeight {
 			t.Errorf("qwen weight = %d, want %d", w.Weight, SuperWeight)
@@ -64,10 +64,10 @@ func TestResolveModelBlockOverridesBase(t *testing.T) {
 	v.File.Models = map[string]struct {
 		Words map[string]*int `yaml:"words"`
 	}{
-		dashscope.ModelFunASRFlash: {Words: map[string]*int{"百炼": weight(2), "声网": weight(5)}},
+		dashscope.ModelFunASR: {Words: map[string]*int{"百炼": weight(2), "声网": weight(5)}},
 	}
 
-	words, _ := v.Resolve(dashscope.ModelFunASRFlash)
+	words, _ := v.Resolve(dashscope.ModelFunASR)
 	byText := map[string]int{}
 	for _, w := range words {
 		byText[w.Text] = w.Weight
@@ -80,7 +80,7 @@ func TestResolveModelBlockOverridesBase(t *testing.T) {
 	}
 
 	// The base is untouched for other models.
-	words, _ = v.Resolve(dashscope.ModelQwenAudioASRFlash)
+	words, _ = v.Resolve(dashscope.ModelQwenAudioFile)
 	for _, w := range words {
 		if w.Text == "声网" {
 			t.Error("model block leaked into another model")
@@ -93,7 +93,7 @@ func TestResolveDropsOversizedWords(t *testing.T) {
 	v.File.Words["这是一个非常长的热词超过了十五个字符的限制"] = weight(4)
 	v.File.Words["one two three four five six seven eight"] = weight(4)
 
-	words, warnings := v.Resolve(dashscope.ModelFunASRFlash)
+	words, warnings := v.Resolve(dashscope.ModelFunASR)
 	for _, w := range words {
 		if len([]rune(w.Text)) > 15 {
 			t.Errorf("oversized word survived: %q", w.Text)
@@ -110,7 +110,7 @@ func TestResolveDropsUnsupportedLang(t *testing.T) {
 	v := fixture()
 	v.File.Lang = "de"
 
-	words, warnings := v.Resolve(dashscope.ModelFunASRFlash)
+	words, warnings := v.Resolve(dashscope.ModelFunASR)
 	for _, w := range words {
 		if w.Lang != "" {
 			t.Errorf("lang = %q, want empty", w.Lang)
@@ -120,7 +120,7 @@ func TestResolveDropsUnsupportedLang(t *testing.T) {
 		t.Error("dropping a lang must warn")
 	}
 
-	words, _ = v.Resolve(dashscope.ModelQwenAudioASRFlash)
+	words, _ = v.Resolve(dashscope.ModelQwenAudioFile)
 	if len(words) > 0 && words[0].Lang != "de" {
 		t.Errorf("qwen lang = %q, want de", words[0].Lang)
 	}
@@ -129,9 +129,9 @@ func TestResolveDropsUnsupportedLang(t *testing.T) {
 // The content hash keys both the sync short-circuit and the run's sid, so map
 // iteration order must never change it.
 func TestContentHashIsStable(t *testing.T) {
-	first, _ := fixture().Resolve(dashscope.ModelFunASRFlash)
+	first, _ := fixture().Resolve(dashscope.ModelFunASR)
 	for i := 0; i < 20; i++ {
-		next, _ := fixture().Resolve(dashscope.ModelFunASRFlash)
+		next, _ := fixture().Resolve(dashscope.ModelFunASR)
 		if ContentHash(first) != ContentHash(next) {
 			t.Fatal("content hash is not stable across resolves")
 		}
@@ -139,11 +139,11 @@ func TestContentHashIsStable(t *testing.T) {
 }
 
 func TestContentHashChangesWithContent(t *testing.T) {
-	base, _ := fixture().Resolve(dashscope.ModelFunASRFlash)
+	base, _ := fixture().Resolve(dashscope.ModelFunASR)
 
 	v := fixture()
 	v.File.Words["百炼"] = weight(3)
-	changed, _ := v.Resolve(dashscope.ModelFunASRFlash)
+	changed, _ := v.Resolve(dashscope.ModelFunASR)
 
 	if ContentHash(base) == ContentHash(changed) {
 		t.Error("editing a weight must change the content hash")
@@ -176,8 +176,8 @@ func TestClaimedIDsIgnoresDeletedYAML(t *testing.T) {
 	}
 
 	idx := Index{
-		"kept":    {dashscope.ModelFunASRFlash: Entry{VocabularyID: "vocab-kept"}},
-		"deleted": {dashscope.ModelFunASRFlash: Entry{VocabularyID: "vocab-deleted"}},
+		"kept":    {dashscope.ModelFunASR: Entry{VocabularyID: "vocab-kept"}},
+		"deleted": {dashscope.ModelFunASR: Entry{VocabularyID: "vocab-deleted"}},
 	}
 
 	claimed := claimedIDs(dir, idx)
@@ -252,7 +252,7 @@ func TestResolveDropsBlankWords(t *testing.T) {
 	v := fixture()
 	v.File.Words["   "] = weight(4)
 
-	words, _ := v.Resolve(dashscope.ModelFunASRFlash)
+	words, _ := v.Resolve(dashscope.ModelFunASR)
 	for _, w := range words {
 		if strings.TrimSpace(w.Text) == "" {
 			t.Error("a blank word reached the request")

@@ -10,7 +10,7 @@ import (
 
 func TestSIDIsStableAndArgSensitive(t *testing.T) {
 	audio := []byte("fake audio bytes")
-	base := Args{Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}}
+	base := Args{Model: dashscope.ModelFunASR, Lang: []string{"zh"}}
 
 	first := SID(Digest(audio, base))
 	if first != SID(Digest(audio, base)) {
@@ -22,12 +22,11 @@ func TestSIDIsStableAndArgSensitive(t *testing.T) {
 
 	// Every field in Args must re-key the run.
 	variants := map[string]Args{
-		"model":    {Model: dashscope.ModelQwenAudioASRFlash, Lang: []string{"zh"}},
-		"lang":     {Model: dashscope.ModelFunASRFlash, Lang: []string{"en"}},
-		"vocab":    {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Vocab: "abcd1234"},
-		"speakers": {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Speakers: true},
-		"context":  {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Context: []string{"DashScope"}},
-		"format":   {Model: dashscope.ModelFunASRFlash, Lang: []string{"zh"}, Format: "mp3"},
+		"model":    {Model: dashscope.ModelQwenAudioFile, Lang: []string{"zh"}},
+		"lang":     {Model: dashscope.ModelFunASR, Lang: []string{"en"}},
+		"vocab":    {Model: dashscope.ModelFunASR, Lang: []string{"zh"}, Vocab: "abcd1234"},
+		"speakers": {Model: dashscope.ModelFunASR, Lang: []string{"zh"}, Speakers: true},
+		"format":   {Model: dashscope.ModelFunASR, Lang: []string{"zh"}, Format: "mp3"},
 	}
 	for name, args := range variants {
 		if SID(Digest(audio, args)) == first {

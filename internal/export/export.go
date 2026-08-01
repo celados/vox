@@ -1,7 +1,6 @@
-// Package export renders a stored run. Cue segmentation happens here because
-// the recognition API does not segment: a multi-sentence take comes back as one
-// sentence spanning the whole file, both non-streaming and over SSE. The only
-// segmentation signal available is per-word punctuation and inter-word gaps.
+// Package export renders a stored run. The service supplies its own sentence
+// boundaries, so cues follow those; the word-level splitter here only divides a
+// sentence too long to be one subtitle.
 package export
 
 import (
@@ -146,20 +145,16 @@ func Render(rec *run.Record, format string) (string, error) {
 	}
 }
 
-// cues prefers the service's own sentence boundaries. The async transport
-// segments natively and far better than punctuation heuristics can; the
-// client-side splitter exists only for the synchronous transport, which returns
-// the whole take as one blob.
+// cues uses the service's own sentence boundaries. Segment() is reached only to
+// divide a sentence that is too long to be one subtitle.
 func cues(rec *run.Record) []Cue {
-	if rec.Result.Segmented() {
+	if len(rec.Result.Sentences) > 0 {
 		return fromSentences(rec.Result.Sentences)
-	}
-	if segmented := Segment(rec.Result.Words()); len(segmented) > 0 {
-		return segmented
 	}
 	if strings.TrimSpace(rec.Result.Text) == "" {
 		return nil
 	}
+	// No timings at all: one cue spanning the recording still beats an empty file.
 	return []Cue{{
 		Index: 1,
 		Begin: 0,

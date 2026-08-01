@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Asynchronous file transcription: the long transport. Unlike the synchronous
-// endpoint it caps at 12 hours, segments into sentences natively, and reports
-// per-word confidence.
+// File transcription: vox's only recognition path. Audio is uploaded, a task is
+// submitted, and the result is polled. It caps at 12 hours, segments into
+// sentences natively, and reports per-word confidence.
 // https://help.aliyun.com/zh/model-studio/recording-file-recognition
 const (
 	transcriptionPath = "/services/audio/asr/transcription"
@@ -19,8 +19,10 @@ const (
 	ModelFunASR        = "fun-asr"
 	ModelQwenAudioFile = "qwen-audio-3.0-asr-flash-filetrans"
 
-	// MaxFileSeconds is the documented cap for the async transport.
+	// MaxFileSeconds is the documented cap. It is the only length limit vox has.
 	MaxFileSeconds = 12 * 60 * 60
+	// MaxFileBytes is the documented per-file cap.
+	MaxFileBytes = 2 * 1024 * 1024 * 1024
 	// DiarizationMaxSeconds is where the docs stop recommending diarization;
 	// beyond it recognition may time out rather than degrade.
 	DiarizationMaxSeconds = 2 * 60 * 60
@@ -149,9 +151,8 @@ func (c *Client) awaitTask(taskID string, progress TaskProgress) (string, error)
 	}
 }
 
-// fetchTranscript downloads the result document and flattens it into the shape
-// both transports share. The URL is signed and expires in 24 hours, which is
-// why the content is stored rather than the link.
+// fetchTranscript downloads the result document. Its URL is signed and expires
+// in 24 hours, which is why the content is stored rather than the link.
 func (c *Client) fetchTranscript(url string) (*ASRResult, error) {
 	resp, err := c.httpClient.Get(url)
 	if err != nil {

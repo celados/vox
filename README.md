@@ -3,6 +3,9 @@
 Agent-facing speech to text and text to speech, over Alibaba Model Studio
 (DashScope).
 
+Offline file transcription: upload, infer, store. There is no realtime mode and
+no microphone capture — vox transcribes files, up to 12 hours each.
+
 Transcription is content-addressed: the same audio and the same recognition
 options always resolve to the same run id, and everything after transcription —
 markdown, subtitles, plain text — is an operation on the stored run. The full
@@ -24,8 +27,8 @@ go install github.com/celados/vox@latest
 Note that `go install` writes to `GOBIN`, which may sit earlier in `PATH` than
 `~/.local/bin` — `make link` warns when a copy elsewhere is still winning.
 
-`ffmpeg`/`ffprobe` are optional: `ffprobe` supplies the duration precheck for
-non-WAV input, `ffmpeg` compresses the TTS cache.
+`ffmpeg`/`ffprobe` are optional: `ffprobe` reports duration for non-WAV input
+before upload, `ffmpeg` compresses the TTS cache.
 
 ## Quick Start
 
@@ -42,10 +45,10 @@ vox say "Hello world" --voice Cherry
 
 ```bash
 vox hear recording.wav                     # transcribe a file
+vox hear lecture.mp3 --lang zh             # pin the language (biggest quality lever)
+vox hear meeting.m4a --speakers            # label speakers
 vox hear recording.wav --vocab meeting     # with a hotword vocabulary
-vox hear recording.wav --lang zh           # pin the language
 vox hear recording.wav --refresh           # re-recognize, overwrite the run
-vox hear --mic --duration 10               # record and transcribe
 
 vox session ls                             # the run index, newest first
 vox session ls --file recording.wav        # runs for one source
@@ -63,7 +66,7 @@ caller never receives an unbounded transcript it did not ask for.
 ```yaml
 sid: fe3ddc6ebfca
 source: ~/recordings/meeting.wav
-model: fun-asr-flash-2026-06-15
+model: fun-asr
 vocab: meeting@e4a2648e
 created: 2026-08-01T06:08:57Z
 path: ~/.vox/runs/fe3ddc6ebfca
@@ -76,19 +79,25 @@ branches instead of parsing prose:
 
 ```yaml
 code: audio_too_large
-message: audio is 412s, over the 300s limit for this model
-hint: split the file into segments under 5 minutes
+message: audio is 13h20m, over the 12h limit
+hint: split the file into parts under 12 hours
 ```
 
-### Models
+### How it runs
 
-| Model | Hotword lists | Super hotwords | Language hints |
-|-------|---------------|----------------|----------------|
-| `fun-asr-flash-2026-06-15` (default) | yes | no | first one only |
-| `qwen-audio-3.0-asr-flash` | yes | yes (weight 50) | up to 4 |
+Every transcription is a file job: the audio is uploaded to Model Studio's free
+48-hour temporary store, an async task is submitted, and vox polls it to
+completion — roughly a minute per 45 minutes of audio. Nothing to host, no
+credentials beyond the API key.
 
-Both cap at 5 minutes / 10MB per request, checked locally before upload. Both
-cover Mandarin plus major dialects and ~30 other languages.
+| Model | Hotword lists | Super hotwords | Diarization |
+|-------|---------------|----------------|-------------|
+| `fun-asr` (default) | yes | no | yes |
+| `qwen-audio-3.0-asr-flash-filetrans` | yes | yes (weight 50) | yes |
+
+Both cap at 12 hours / 2GB and cover Mandarin plus major dialects and ~30 other
+languages. Sentence boundaries, word timings and per-word confidence come from
+the service, so subtitles are not guessed from punctuation.
 
 ## Vocabularies
 
@@ -106,7 +115,7 @@ words:
 
 # Optional: per-model intent. Merged over the base, model block wins.
 models:
-  fun-asr-flash-2026-06-15:
+  fun-asr:
     words:
       声网: 5
 ```
@@ -123,7 +132,7 @@ content is part of the run id, editing the YAML produces a new run on the next
 `hear` with no cache-busting flag.
 
 Model-specific API limits are applied by the adapter, not by you: `weight: 50`
-is clamped to 5 on Fun-ASR, unsupported language codes are dropped, oversized
+is clamped to 5 on `fun-asr`, unsupported language codes are dropped, oversized
 words are skipped, and each is reported on stderr. **The account cap is 10 lists
 shared across all models** — one vocabulary synced to both models consumes two.
 

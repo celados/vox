@@ -5,10 +5,11 @@ description: Voice I/O — transcribe audio to text, subtitles or markdown, and 
 
 # vox
 
-Speech to text and text to speech through the terminal, over Alibaba Model
-Studio. Transcription is content-addressed: `vox hear` stores a **run** and
-returns its id; everything after that — markdown, subtitles, plain text — is an
-export from that run, with no re-recognition.
+Offline file transcription and TTS through the terminal, over Alibaba Model
+Studio. `vox hear` uploads a file, transcribes it, and stores a **run**;
+everything after that — markdown, subtitles, plain text — is an export from that
+run, with no re-recognition. There is no realtime mode and no mic capture for
+ASR; files up to 12 hours are ordinary input.
 
 ## When to Use
 
@@ -21,10 +22,10 @@ export from that run, with no re-recognition.
 
 ```bash
 vox hear recording.wav                     # → YAML envelope carrying the run id
+vox hear lecture.mp3 --lang zh             # pin the language — the biggest quality lever
+vox hear meeting.m4a --speakers            # label speakers (under ~2 hours)
 vox hear recording.wav --vocab meeting     # boost domain terms (see Vocabularies)
-vox hear recording.wav --lang zh           # pin the language; omit to auto-detect
 vox hear recording.wav --refresh           # re-recognize and overwrite
-vox hear --mic --duration 10               # record from the microphone
 
 vox session ls                             # run index, newest first
 vox session ls --file recording.wav        # runs for one source file
@@ -36,9 +37,11 @@ vox export a3f1c2 --format txt             # plain transcript, pipeable
 vox export a3f1c2 --format json            # word-level timestamps
 ```
 
-Models: `fun-asr-flash-2026-06-15` (default) and `qwen-audio-3.0-asr-flash` via
-`-m`. Both cap at **5 minutes / 10MB** per request. Longer input fails with
-`audio_too_large` before upload — split the file and transcribe the parts.
+Models: `fun-asr` (default) and `qwen-audio-3.0-asr-flash-filetrans` via `-m`.
+Both cap at **12 hours / 2GB**. A transcription is an upload plus an async task,
+so expect roughly a minute per 45 minutes of audio — long files are normal, not
+an edge case. Do **not** split a file to work around length: splitting truncates
+words at every cut and loses the service's own sentence boundaries.
 
 ## Reading the output
 
@@ -54,7 +57,8 @@ code, do not parse the message:
 
 `not_authenticated` · `audio_too_large` · `audio_unsupported` ·
 `vocab_not_found` · `vocab_quota_exceeded` · `vocab_model_mismatch` ·
-`session_not_found` · `session_ambiguous` · `api_error`
+`vocab_index_corrupt` · `session_not_found` · `session_ambiguous` ·
+`invalid_usage` · `io_error` · `api_error`
 
 ## Vocabularies
 
@@ -83,7 +87,8 @@ Editing the YAML changes the run id, so the next `hear` re-recognizes on its own
 Two limits worth knowing before creating vocabularies: **10 lists per account,
 shared across models** (one vocabulary used with both models consumes two), and
 words are at most 15 characters when non-ASCII. Weight is 1–5; 50 is a "super
-hotword" that only `qwen-audio-3.0-asr-flash` honours and is clamped elsewhere.
+hotword" that only `qwen-audio-3.0-asr-flash-filetrans` honours and is clamped
+elsewhere.
 
 ## Text to speech
 
@@ -116,8 +121,10 @@ vox auth logout
 ## Tips
 
 - Re-running `vox hear` on the same file is free — it returns the stored run.
-- Prefer `--vocab` over `--context` for proper nouns; context is for
-  conversational history and is capped at 400 characters per round.
+- `--lang` is the cheapest quality win on known-language audio; measured, it
+  fixed proper nouns that a hotword vocabulary did not.
+- `--vocab` is for domain terms the model cannot know; it cannot recover audio,
+  only bias what the model hears.
 - `vox export --format txt` is the pipeable form; the envelope is not.
 - For voice cloning, 10–20 seconds of clean audio works best.
 - If a cloned voice exists, `vox say` uses it without `--voice`.

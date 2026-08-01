@@ -235,7 +235,7 @@ func langFor(model, lang string) string {
 	if lang == "" {
 		return ""
 	}
-	if model == dashscope.ModelFunASRFlash && !funASRLangs[lang] {
+	if model == dashscope.ModelFunASR && !funASRLangs[lang] {
 		return ""
 	}
 	return lang

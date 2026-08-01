@@ -34,9 +34,8 @@ type Args struct {
 	Speakers bool `yaml:"speakers,omitempty" json:"speakers,omitempty"`
 	// Vocab is the resolved content hash, never the vocabulary's name: two files
 	// with identical words must not fork the run, and editing one must.
-	Vocab   string   `yaml:"vocab,omitempty" json:"vocab,omitempty"`
-	Lang    []string `yaml:"lang,omitempty" json:"lang,omitempty"`
-	Context []string `yaml:"context,omitempty" json:"context,omitempty"`
+	Vocab string   `yaml:"vocab,omitempty" json:"vocab,omitempty"`
+	Lang  []string `yaml:"lang,omitempty" json:"lang,omitempty"`
 }
 
 type Size struct {
@@ -48,16 +47,14 @@ type Size struct {
 
 // Meta is the envelope: what `hear` prints and what `session ls` lists.
 type Meta struct {
-	SID    string `yaml:"sid" json:"sid"`
-	Source string `yaml:"source" json:"source"`
-	Model  string `yaml:"model" json:"model"`
-	// Transport is sync or async — which endpoint produced this run.
-	Transport string    `yaml:"transport" json:"transport"`
-	Vocab     string    `yaml:"vocab,omitempty" json:"vocab,omitempty"`
-	Lang      []string  `yaml:"lang,omitempty" json:"lang,omitempty"`
-	Created   time.Time `yaml:"created" json:"created"`
-	Path      string    `yaml:"path" json:"path"`
-	Size      Size      `yaml:"size" json:"size"`
+	SID     string    `yaml:"sid" json:"sid"`
+	Source  string    `yaml:"source" json:"source"`
+	Model   string    `yaml:"model" json:"model"`
+	Vocab   string    `yaml:"vocab,omitempty" json:"vocab,omitempty"`
+	Lang    []string  `yaml:"lang,omitempty" json:"lang,omitempty"`
+	Created time.Time `yaml:"created" json:"created"`
+	Path    string    `yaml:"path" json:"path"`
+	Size    Size      `yaml:"size" json:"size"`
 }
 
 // Record is a run's full content, kept beside the envelope.

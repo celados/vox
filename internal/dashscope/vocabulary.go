@@ -93,7 +93,7 @@ func (c *Client) QueryVocabulary(vocabularyID string) (*VocabularyInfo, []Hotwor
 			if !ok {
 				continue
 			}
-			w := Hotword{Weight: toInt(m["weight"])}
+			w := Hotword{Weight: jsonInt(m["weight"])}
 			w.Text, _ = m["text"].(string)
 			w.Lang, _ = m["lang"].(string)
 			words = append(words, w)
@@ -131,6 +131,15 @@ func (c *Client) ListVocabularies() ([]VocabularyInfo, error) {
 		list = append(list, info)
 	}
 	return list, nil
+}
+
+// jsonInt reads a JSON number, which encoding/json always decodes as float64.
+func jsonInt(v any) int {
+	f, ok := v.(float64)
+	if !ok {
+		return 0
+	}
+	return int(f)
 }
 
 func (c *Client) DeleteVocabulary(vocabularyID string) error {
