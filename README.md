@@ -1,108 +1,91 @@
 # vox
 
 Agent-facing speech to text and text to speech, over Alibaba Model Studio
-(DashScope).
+(DashScope). An [argc](https://github.com/ethan-huo/argc) CLI on Bun.
 
-Offline file transcription: upload, infer, store. There is no realtime mode and
-no microphone capture — vox transcribes files, up to 12 hours each.
+Offline file transcription: upload, infer, store. There is no realtime ASR
+and no microphone capture for transcription — vox transcribes files, up to
+12 hours each.
 
 Transcription is content-addressed: the same audio and the same recognition
-options always resolve to the same run id, and everything after transcription —
-markdown, subtitles, plain text — is an operation on the stored run. The full
-surface contract lives in [docs/cli-schema.md](docs/cli-schema.md).
+options always resolve to the same run id, and everything after transcription
+— markdown, subtitles, plain text — is an operation on the stored run. The
+full surface contract lives in [docs/cli-schema.md](docs/cli-schema.md).
 
 ## Install
 
-```bash
-make link          # builds bin/vox and symlinks it into ~/.local/bin
-```
-
-`make build` alone leaves the binary in `bin/`; `make unlink` removes the
-symlink. Installing straight from the module also works:
+From a checkout:
 
 ```bash
-go install github.com/celados/vox@latest
+bun install
+bun link          # PATH → ./src/main.ts
+vox --version
+vox @schema
 ```
 
-Note that `go install` writes to `GOBIN`, which may sit earlier in `PATH` than
-`~/.local/bin` — `make link` warns when a copy elsewhere is still winning.
+From a GitHub Release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/celados/vox/main/install.sh | bash
+```
 
 `ffmpeg`/`ffprobe` are optional: `ffprobe` reports duration for non-WAV input
-before upload, `ffmpeg` compresses the TTS cache.
+before upload, `ffmpeg` compresses the TTS cache and records a clone sample.
+Playback uses `afplay` on macOS, or `ffplay`/`aplay`.
 
 ## Quick Start
 
 ```bash
-vox auth login dashscope           # prompts, validates, then stores the key
+vox auth.login                 # prompts, validates, then stores the key
 
-vox hear meeting.wav               # → YAML envelope with the run id
-vox export a3f1c2 --format srt     # → subtitles from the stored run
+vox hear --file meeting.wav    # → YAML envelope with the run id
+vox export --sid a3f1c2 --format srt
 
-vox say "Hello world" --voice Cherry
+vox say --text 'Hello world' --voice Cherry
 ```
 
 ## Speech to text
 
 ```bash
-vox hear recording.wav                     # transcribe a file
-vox hear lecture.mp3 --lang zh             # pin the language (biggest quality lever)
-vox hear meeting.m4a --speakers            # label speakers
-vox hear recording.wav --vocab meeting     # with a hotword vocabulary
-vox hear recording.wav --refresh           # re-recognize, overwrite the run
+vox hear --file recording.wav
+vox hear --file lecture.mp3 --lang zh
+vox hear "{ file: 'lecture.mp3', lang: ['zh'] }"
+vox hear "{ file: 'meeting.m4a', speakers: true }"
+vox hear "{ file: 'recording.wav', vocab: 'meeting' }"
+vox hear "{ file: 'recording.wav', refresh: true }"
 
-vox session ls                             # the run index, newest first
-vox session ls --file recording.wav        # runs for one source
-vox session rm a3f1c2                      # accepts any unique prefix
+vox session.list
+vox session.list --file recording.wav
+vox session.remove --sid a3f1c2
 
-vox export a3f1c2 --format md              # markdown with frontmatter
-vox export a3f1c2 --format srt -o out.srt  # subtitles
-vox export a3f1c2 --format json            # transcript with word timestamps
+vox export --sid a3f1c2 --format md
+vox export --sid a3f1c2 --format srt --output out.srt
+vox export --sid a3f1c2 --format json
 ```
 
-`hear` prints one YAML document. A short transcript is inlined as `text`; a long
-one folds to a `preview` plus the `vox export` command that reads the rest, so a
-caller never receives an unbounded transcript it did not ask for.
+`hear` prints one YAML document. A short transcript is inlined as `text`; a
+long one folds to a `preview` plus `$hints` naming the `vox export` command.
 
-```yaml
-sid: fe3ddc6ebfca
-source: ~/recordings/meeting.wav
-model: fun-asr
-vocab: meeting@e4a2648e
-created: 2026-08-01T06:08:57Z
-path: ~/.vox/runs/fe3ddc6ebfca
-size: { tokens: 54, words: 37, chars: 65, duration: 10 }
-text: 第一句话，我们在测试句子切分…
-```
-
-Failures print one YAML document to stderr with a closed-set `code`, so a caller
-branches instead of parsing prose:
-
-```yaml
-code: audio_too_large
-message: audio is 13h20m, over the 12h limit
-hint: split the file into parts under 12 hours
-```
+Failures print one YAML document to stderr with `error: DOMAIN_ERROR` and a
+closed-set `code`.
 
 ### How it runs
 
-Every transcription is a file job: the audio is uploaded to Model Studio's free
-48-hour temporary store, an async task is submitted, and vox polls it to
-completion — roughly a minute per 45 minutes of audio. Nothing to host, no
-credentials beyond the API key.
+Every transcription is a file job: the audio is uploaded to Model Studio's
+free 48-hour temporary store, an async task is submitted, and vox polls it
+to completion — roughly a minute per 45 minutes of audio.
 
-| `-m` | Model | Hotword lists | Super hotwords | Diarization |
-|------|-------|---------------|----------------|-------------|
-| `fun` (default) | `fun-asr` | yes | no | yes |
-| `qwen` | `qwen-audio-3.0-asr-flash-filetrans` | yes | yes (weight 50) | yes |
+| `model`         | Model                                | Hotword lists | Super hotwords  | Diarization |
+| --------------- | ------------------------------------ | ------------- | --------------- | ----------- |
+| `fun` (default) | `fun-asr`                            | yes           | no              | yes         |
+| `qwen`          | `qwen-audio-3.0-asr-flash-filetrans` | yes           | yes (weight 50) | yes         |
 
-Both cap at 12 hours / 2GB and cover Mandarin plus major dialects and ~30 other
-languages. Sentence boundaries, word timings and per-word confidence come from
-the service, so subtitles are not guessed from punctuation.
+Both cap at 12 hours / 2GB.
 
 ## Vocabularies
 
-A vocabulary is a YAML file. The CLI never edits it — it only reconciles it with
-the server-side hotword list.
+A vocabulary is a YAML file. The CLI never edits it — it only reconciles it
+with the server-side hotword list.
 
 ```yaml
 # ~/.vox/vocabulary/meeting.yaml
@@ -111,53 +94,36 @@ default_weight: 4
 words:
   百炼: 5
   Fun-ASR: 5
-  赛德克巴莱:           # empty → default_weight
-
-# Optional: per-model intent. Merged over the base, model block wins.
-models:
-  fun-asr:      # keyed by the resolved model id, not the -m alias
-    words:
-      声网: 5
+  赛德克巴莱:
 ```
 
 ```bash
-vox vocab ls                  # names, paths, per-model sync state, remote quota
-vox vocab sync meeting        # usually unnecessary — `hear --vocab` syncs on demand
-vox vocab prune --dry-run     # server-side lists no local file claims
+vox vocab.list
+vox vocab.sync --name meeting
+vox vocab.prune --dryRun
 ```
 
-Sync is driven by a content hash: unchanged content makes no request, changed
-content updates in place so the `vocabulary_id` survives. Because the resolved
-content is part of the run id, editing the YAML produces a new run on the next
-`hear` with no cache-busting flag.
-
-Model-specific API limits are applied by the adapter, not by you: `weight: 50`
-is clamped to 5 on `fun`, unsupported language codes are dropped, oversized
-words are skipped, and each is reported on stderr. **The account cap is 10 lists
-shared across all models** — one vocabulary synced to both models consumes two.
+The account cap is 10 lists shared across all models.
 
 ## Text to speech
 
-`say`, `voice` and `cache` carry over unchanged and have not been moved onto
-runs yet.
-
 ```bash
-vox say "你好世界" --voice Cherry --speed 1.2
-vox say "Save this" --output out.wav
-vox voice list
-vox voice record --file sample.wav --name myvoice
-vox cache status
+vox say --text '你好世界' --voice Cherry --speed 1.2
+vox say --text 'Save this' --output out.wav
+vox voice.list
+vox voice.record --file sample.wav --name myvoice
+vox cache.status
 ```
 
-| Voice | Gender | Language |
-|-------|--------|----------|
-| Cherry | Female | zh/en |
-| Ethan | Male | zh/en |
-| Chelsie | Female | zh/en |
-| Serena | Female | zh/en |
-| Dylan | Male | zh (Beijing) |
-| Jada | Female | zh (Shanghai) |
-| Sunny | Female | zh (Sichuan) |
+| Voice   | Gender | Language      |
+| ------- | ------ | ------------- |
+| Cherry  | Female | zh/en         |
+| Ethan   | Male   | zh/en         |
+| Chelsie | Female | zh/en         |
+| Serena  | Female | zh/en         |
+| Dylan   | Male   | zh (Beijing)  |
+| Jada    | Female | zh (Shanghai) |
+| Sunny   | Female | zh (Sichuan)  |
 
 ## Storage
 

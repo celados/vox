@@ -1,2 +1,6 @@
-/vox
-bin/
+node_modules/
+*.tgz
+.logs/
+.env
+# Build output is CI-only (release workflow). Local use is bun link → src/main.ts.
+dist/
