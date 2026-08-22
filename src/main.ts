@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { cli } from "argc";
+import { cli } from "@celados/argc";
 
 import packageJson from "../package.json" with { type: "json" };
 import { withDomainErrors } from "./cli-error.ts";

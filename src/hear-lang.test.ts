@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { cli } from "argc";
+import { cli } from "@celados/argc";
 
 import { schema } from "./schema.ts";
 

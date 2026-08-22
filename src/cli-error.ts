@@ -1,4 +1,4 @@
-import { domainError } from "argc";
+import { domainError } from "@celados/argc";
 
 export type VoxErrorCode =
   | "not_authenticated"
