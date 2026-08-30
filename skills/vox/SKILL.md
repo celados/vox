@@ -1,10 +1,9 @@
 ---
 name: vox
 description: >
-  Voice I/O — transcribe audio to text, subtitles or markdown, and speak text
-  aloud with TTS voice cloning. Discover the command surface via `vox @schema`
-  before inventing calls.
+  When a task requires transcribing audio to text, subtitles, or Markdown, or
+  speaking text aloud with TTS voice cloning, run `vox @skill` immediately to
+  load the full usage guide.
 ---
 
 Run `vox @skill` now for the full usage guide.
-Read a referenced file with `vox @skill <path>`.
