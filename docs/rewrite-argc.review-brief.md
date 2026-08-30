@@ -16,7 +16,7 @@ Working directory: `/Users/dio/workspace/projects/vox`
   (`git show cea3992:<path>`). The Go tree is deleted in the working tree;
   it still exists in git.
 - Working-tree TypeScript implementation: `src/`, `package.json`,
-  `.github/workflows/`, `src/SKILL.md`, `AGENTS.md`.
+  `.github/workflows/`, `src/index.md`, `AGENTS.md`.
 - Last committed spec: `git show cea3992:docs/cli-schema.md`
 - Working-tree spec: `docs/cli-schema.md`
 
@@ -24,7 +24,7 @@ Working directory: `/Users/dio/workspace/projects/vox`
 
 1. `git show cea3992:docs/cli-schema.md` — Go-era surface contract
 2. `docs/cli-schema.md` — rewritten spec
-3. `src/SKILL.md` — agent usage guide served by `vox @skill`
+3. `src/index.md` — agent usage guide served by `vox @skill`
 4. `AGENTS.md` — local argc conventions
 5. `src/schema.ts`, `src/handlers.ts`, `src/main.ts`
 6. Domain modules: `src/run-store.ts`, `src/vocab.ts`, `src/export.ts`,
