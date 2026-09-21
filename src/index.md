@@ -15,11 +15,12 @@ vox status
 ```
 
 Unauthenticated status is only `{ authenticated: false }`. Authenticated status
-is `{ service: dashscope }` — no token material.
+lists the configured provider or providers — never token material.
 
 ```bash
 vox auth.login                  # TTY: prompts for the key
 vox auth.login --token sk-...   # non-TTY
+vox auth.login --service mimo   # Xiaomi MiMo API
 ```
 
 ## Speech to text
@@ -45,8 +46,16 @@ vox export --sid a3f1c2 --format txt
 biases domain terms; it cannot recover bad audio. Do not split a file to work
 around length: splitting truncates words at every cut.
 
-Vendors: `fun` (default, Fun-ASR) or `qwen`. Both cap at **12 hours / 2 GB**.
-Expect roughly a minute per 45 minutes of audio.
+Vendors: `fun` (default, Fun-ASR), `qwen`, or `mimo`. DashScope's `fun` and
+`qwen` cap at **12 hours / 2 GB**. MiMo accepts only MP3/WAV with Base64 payloads
+up to 10 MB, returns plain text without timestamps or speaker labels, and does
+not support Vox vocabularies. Use it for short A/B samples:
+
+```bash
+vox hear --file sample.mp3 --model mimo --lang zh
+```
+
+Expect roughly a minute per 45 minutes of audio from the DashScope file models.
 
 `hear` returns a YAML envelope. A short transcript is inlined as `text`. A long
 one folds to `preview` plus `$hints` naming the `vox export` command. Do not

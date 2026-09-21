@@ -2,7 +2,7 @@ import { extname, resolve } from "node:path";
 
 import { durationSeconds, isSupportedFormat, supportedFormats } from "./audio.ts";
 import { voxError } from "./cli-error.ts";
-import { requireApiKey, type AppConfig } from "./config.ts";
+import { requireApiKey, requireMimoApiKey, type AppConfig } from "./config.ts";
 import {
   DashScopeClient,
   DIARIZATION_MAX_SECONDS,
@@ -10,6 +10,7 @@ import {
   MAX_FILE_SECONDS,
   resolveModel,
 } from "./dashscope.ts";
+import { MimoClient, MODEL_MIMO_ASR, mimoAudioData, mimoLanguage } from "./mimo.ts";
 import { tilde } from "./paths.ts";
 import {
   digestOf,
@@ -38,14 +39,15 @@ export type HearInput = {
 };
 
 export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
-  const apiKey = requireApiKey(app);
   const vendor = input.model ?? "fun";
-  const model = resolveModel(vendor);
+  const model = vendor === "mimo" ? MODEL_MIMO_ASR : resolveModel(vendor);
   if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
+  const apiKey = vendor === "mimo" ? requireMimoApiKey(app) : requireApiKey(app);
 
   const { data, format, source } = await readAudio(input.file);
   const durationSec = await durationSeconds(source, data);
   checkLimits(data.byteLength, durationSec);
+  if (vendor === "mimo") validateMimoRequest(data, format, input);
   if (input.speakers && durationSec > DIARIZATION_MAX_SECONDS) {
     console.error(
       `diarization past ${DIARIZATION_MAX_SECONDS / 3600}h may time out rather than degrade`,
@@ -83,10 +85,10 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
     console.error("duration unknown; the service will report it");
   }
 
-  const client = new DashScopeClient(apiKey);
+  const client = vendor === "mimo" ? undefined : new DashScopeClient(apiKey);
   let vocabularyId = "";
   if (loadedVocab && args.vocab) {
-    const result = await syncVocabulary(client, app.dir, loadedVocab, model, false);
+    const result = await syncVocabulary(client!, app.dir, loadedVocab, model, false);
     for (const warning of result.warnings) console.error(`${loadedVocab.name}: ${warning}`);
     if (result.action !== "reused") console.error(`vocab ${input.vocab} ${result.action}`);
     vocabularyId = result.vocabularyId;
@@ -96,17 +98,20 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
   console.error(`model ${model}${durationSec ? ` ${formatSeconds(durationSec)}` : ""}`);
   let result;
   try {
-    result = await client.transcribeFile(
-      source.split("/").pop() ?? "audio",
-      data,
-      {
-        model,
-        vocabularyId: vocabularyId || undefined,
-        languageHints: args.lang,
-        diarization: args.speakers,
-      },
-      taskProgress(),
-    );
+    result =
+      vendor === "mimo"
+        ? await new MimoClient(apiKey).transcribe(data, format, args.lang)
+        : await client!.transcribeFile(
+            source.split("/").pop() ?? "audio",
+            data,
+            {
+              model,
+              vocabularyId: vocabularyId || undefined,
+              languageHints: args.lang,
+              diarization: args.speakers,
+            },
+            taskProgress(),
+          );
   } catch (error) {
     throw voxError("api_error", error instanceof Error ? error.message : String(error));
   }
@@ -137,6 +142,31 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
     );
   }
   return envelope(rec);
+}
+
+function validateMimoRequest(data: Uint8Array, format: string, input: HearInput): void {
+  if (input.speakers) {
+    throw voxError(
+      "invalid_usage",
+      "MiMo does not return speaker labels",
+      "remove --speakers or use --model qwen",
+    );
+  }
+  if (input.vocab) {
+    throw voxError(
+      "invalid_usage",
+      "MiMo does not support Vox vocabularies",
+      "remove --vocab or use --model qwen",
+    );
+  }
+  try {
+    mimoLanguage(input.lang);
+    mimoAudioData(data, format);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    const code = detail.includes("10 MB") ? "audio_too_large" : "audio_unsupported";
+    throw voxError(code, detail);
+  }
 }
 
 export function envelope(rec: RunRecord): unknown {

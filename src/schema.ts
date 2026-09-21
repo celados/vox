@@ -5,28 +5,32 @@ import { c, group } from "@celados/argc";
 import * as v from "valibot";
 
 const s = toStandardJsonSchema;
-const vendor = v.optional(v.picklist(["fun", "qwen"]), "fun");
+const hearVendor = v.optional(v.picklist(["fun", "qwen", "mimo"]), "fun");
+const dashscopeVendor = v.optional(v.picklist(["fun", "qwen"]), "fun");
+const service = v.optional(v.picklist(["dashscope", "mimo"]), "dashscope");
 
 const status = c
   .meta({
-    description: "Preflight disclosure: authenticated false alone, or service dashscope",
+    description: "Preflight disclosure: authenticated false alone, or configured providers",
     examples: ["vox status"],
   })
   .input(s(v.object({})));
 
 const auth = group(
-  { description: "Authenticate against DashScope (Alibaba Model Studio)" },
+  { description: "Authenticate speech providers" },
   {
     login: c
       .meta({
         description:
-          "Store the DashScope API key after validating it. Prompts on a TTY when token is omitted",
-        examples: ["vox auth.login", "vox auth.login --token sk-..."],
+          "Store and validate a provider API key. Prompts on a TTY when token is omitted",
+        examples: ["vox auth.login", "vox auth.login --service mimo"],
       })
-      .input(s(v.object({ token: v.optional(v.string()) }))),
-    logout: c.meta({ description: "Clear stored DashScope credentials" }).input(s(v.object({}))),
+      .input(s(v.object({ token: v.optional(v.string()), service }))),
+    logout: c
+      .meta({ description: "Clear credentials for one provider" })
+      .input(s(v.object({ service }))),
     status: c
-      .meta({ description: "Auth-only disclosure (same shape as status)" })
+      .meta({ description: "Disclose configured providers without token material" })
       .input(s(v.object({}))),
   },
 );
@@ -44,7 +48,7 @@ const hear = c
     s(
       v.object({
         file: v.pipe(v.string(), v.minLength(1)),
-        model: vendor,
+        model: hearVendor,
         vocab: v.optional(v.string()),
         lang: v.optional(v.array(v.string())),
         speakers: v.optional(v.boolean(), false),
@@ -124,7 +128,7 @@ const vocab = group(
           v.object({
             name: v.optional(v.string()),
             all: v.optional(v.boolean(), false),
-            model: vendor,
+            model: dashscopeVendor,
             force: v.optional(v.boolean(), false),
           }),
         ),

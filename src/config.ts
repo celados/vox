@@ -8,9 +8,14 @@ export type DashScopeConfig = {
   api_key?: string;
 };
 
+export type MimoConfig = {
+  api_key?: string;
+};
+
 export type AppFile = {
   services: {
     dashscope?: DashScopeConfig;
+    mimo?: MimoConfig;
   };
 };
 
@@ -53,8 +58,24 @@ export function requireApiKey(app: AppConfig): string {
   return key;
 }
 
-export async function clearCredentials(app: AppConfig): Promise<void> {
-  app.config.services = {};
+export function requireMimoApiKey(app: AppConfig): string {
+  const key = app.config.services.mimo?.api_key;
+  if (!key) {
+    throw voxError(
+      "not_authenticated",
+      "no Xiaomi MiMo credentials stored",
+      "vox auth.login --service mimo",
+    );
+  }
+  return key;
+}
+
+export async function clearCredentials(
+  app: AppConfig,
+  service?: "dashscope" | "mimo",
+): Promise<void> {
+  if (!service) app.config.services = {};
+  else delete app.config.services[service];
   await saveConfig(app);
 }
 

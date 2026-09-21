@@ -11,6 +11,7 @@ import {
 import { DashScopeClient, resolveModel, VOCABULARY_QUOTA } from "./dashscope.ts";
 import { render } from "./export.ts";
 import { hear } from "./hear.ts";
+import { MimoClient } from "./mimo.ts";
 import { promptSecret } from "./prompt.ts";
 import { listRuns, loadRun, newStore, removeAllRuns, removeRun, resolveSid } from "./run-store.ts";
 import type { AppHandlers } from "./schema.ts";
@@ -30,8 +31,9 @@ import {
 export const handlers: AppHandlers = {
   status: async () => await authStatus(),
   auth: {
-    login: async (options) => await authLogin(options.input.token),
-    logout: async () => await authLogout(),
+    login: async (options) =>
+      await authLogin(options.input.token, options.input.service ?? "dashscope"),
+    logout: async (options) => await authLogout(options.input.service ?? "dashscope"),
     status: async () => await authStatus(),
   },
   hear: async (options) => {
@@ -83,20 +85,34 @@ export const handlers: AppHandlers = {
 
 async function authStatus(): Promise<Record<string, unknown>> {
   const app = await loadConfig();
-  const key = app.config.services.dashscope?.api_key;
-  if (!key) return { authenticated: false };
-  return { service: "dashscope" };
+  const services = (["dashscope", "mimo"] as const).filter((service) =>
+    Boolean(app.config.services[service]?.api_key),
+  );
+  if (services.length === 0) return { authenticated: false };
+  if (services.length === 1) return { service: services[0] };
+  return { services };
 }
 
-async function authLogin(token: string | undefined): Promise<Record<string, unknown>> {
+async function authLogin(
+  token: string | undefined,
+  service: "dashscope" | "mimo",
+): Promise<Record<string, unknown>> {
   let value = token?.trim() ?? "";
-  if (!value) value = await promptSecret("DashScope API Key: ");
   if (!value)
-    throw voxError("invalid_usage", "API key is required", "vox auth.login --token sk-...");
+    value = await promptSecret(
+      service === "mimo" ? "Xiaomi MiMo API Key: " : "DashScope API Key: ",
+    );
+  if (!value)
+    throw voxError(
+      "invalid_usage",
+      "API key is required",
+      `vox auth.login --service ${service} --token sk-...`,
+    );
 
   console.error("validating...");
   try {
-    await new DashScopeClient(value).validate();
+    if (service === "mimo") await new MimoClient(value).validate();
+    else await new DashScopeClient(value).validate();
   } catch (error) {
     throw voxError(
       "api_error",
@@ -105,16 +121,16 @@ async function authLogin(token: string | undefined): Promise<Record<string, unkn
   }
 
   const app = await loadConfig();
-  app.config.services.dashscope = { api_key: value };
+  app.config.services[service] = { api_key: value };
   await saveConfig(app);
-  return { service: "dashscope" };
+  return { service };
 }
 
-async function authLogout(): Promise<Record<string, unknown>> {
+async function authLogout(service: "dashscope" | "mimo"): Promise<Record<string, unknown>> {
   const app = await loadConfig();
-  if (!app.config.services.dashscope?.api_key) return { cleared: false };
-  await clearCredentials(app);
-  return { cleared: true };
+  if (!app.config.services[service]?.api_key) return { service, cleared: false };
+  await clearCredentials(app, service);
+  return { service, cleared: true };
 }
 
 async function sessionRemove(

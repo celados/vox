@@ -68,6 +68,13 @@ test("status discloses unauthenticated without token material", async () => {
   expect(stdout).not.toContain("sk-");
 });
 
+test("schema exposes MiMo as an ASR provider", async () => {
+  const { stdout, stderr, exitCode } = await run(["@schema"]);
+  expect(exitCode, stderr).toBe(0);
+  expect(stdout).toContain('model?: "fun" | "qwen" | "mimo"');
+  expect(stdout).toContain('service?: "dashscope" | "mimo"');
+});
+
 test("hear without credentials is not_authenticated", async () => {
   const home = await mkdtemp(join(tmpdir(), "vox-home-"));
   const { stderr, exitCode } = await run(["hear", "--file", "missing.wav"], home);
