@@ -97,7 +97,10 @@ async function authLogin(
   token: string | undefined,
   service: "dashscope" | "mimo",
 ): Promise<Record<string, unknown>> {
-  let value = token?.trim() ?? "";
+  const environmentValue =
+    service === "mimo" ? process.env.MIMO_API_KEY : process.env.DASHSCOPE_API_KEY;
+  // Environment injection keeps shared credentials out of argv and shell history.
+  let value = token?.trim() || environmentValue?.trim() || "";
   if (!value)
     value = await promptSecret(
       service === "mimo" ? "Xiaomi MiMo API Key: " : "DashScope API Key: ",
@@ -106,7 +109,9 @@ async function authLogin(
     throw voxError(
       "invalid_usage",
       "API key is required",
-      `vox auth.login --service ${service} --token sk-...`,
+      service === "mimo"
+        ? "set MIMO_API_KEY or run vox auth.login --service mimo interactively"
+        : "set DASHSCOPE_API_KEY or run vox auth.login interactively",
     );
 
   console.error("validating...");

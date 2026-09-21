@@ -21,6 +21,7 @@ lists the configured provider or providers — never token material.
 vox auth.login                  # TTY: prompts for the key
 vox auth.login --token sk-...   # non-TTY
 vox auth.login --service mimo   # Xiaomi MiMo API
+MIMO_API_KEY=... vox auth.login --service mimo  # safe environment injection
 ```
 
 ## Speech to text
