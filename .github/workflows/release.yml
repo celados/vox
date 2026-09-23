@@ -6,6 +6,12 @@ on:
   push:
     branches: [main]
 
+# Releases publish to a registry and cut tags — queue them instead of
+# cancelling, so a superseded run never leaves a half-published version.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   detect-version-bump:
     runs-on: ubuntu-latest
