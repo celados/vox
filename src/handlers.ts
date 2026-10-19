@@ -11,6 +11,14 @@ import {
 import { DashScopeClient, resolveModel, VOCABULARY_QUOTA } from "./dashscope.ts";
 import { render } from "./export.ts";
 import { hear } from "./hear.ts";
+import {
+  configureSpeakers,
+  enrollSpeaker,
+  identifyRun,
+  listSpeakers,
+  loadIdentifiedRun,
+  removeSpeaker,
+} from "./speakers.ts";
 import { MimoClient } from "./mimo.ts";
 import { promptSecret } from "./prompt.ts";
 import { listRuns, loadRun, newStore, removeAllRuns, removeRun, resolveSid } from "./run-store.ts";
@@ -39,6 +47,13 @@ export const handlers: AppHandlers = {
   hear: async (options) => {
     const app = await loadConfig();
     return await hear(app, options.input);
+  },
+  speaker: {
+    enroll: async (options) => enrollSpeaker((await loadConfig()).dir, options.input),
+    list: async () => listSpeakers((await loadConfig()).dir),
+    remove: async (options) => removeSpeaker((await loadConfig()).dir, options.input.id),
+    config: async (options) => configureSpeakers((await loadConfig()).dir, options.input),
+    identify: async (options) => identifyRun((await loadConfig()).dir, options.input),
   },
   session: {
     list: async (options) => {
@@ -184,7 +199,7 @@ async function exportRun(input: {
       `run ${sid} has no stored result: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const rendered = render(rec, input.format);
+  const rendered = render(await loadIdentifiedRun(app.dir, rec), input.format);
   if (input.output) {
     try {
       await writeFile(input.output, rendered);

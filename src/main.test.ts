@@ -90,3 +90,21 @@ test("session.remove rejects path traversal before touching the filesystem", asy
   expect(stderr).toContain("code: session_not_found");
   expect(stderr).not.toContain("RUNTIME_ERROR");
 });
+
+test("speaker command schemas preserve enrollment, matching settings, and identity fields", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vox-speaker-cli-"));
+  const schema = await run(["@schema", ".speaker"], home);
+  expect(schema.exitCode, schema.stderr).toBe(0);
+  expect(schema.stdout).toContain("enroll(input: { id: string; name: string; file: string;");
+  expect(schema.stdout).toContain("threshold?: number");
+  const config = await run(["speaker.config", "{ threshold: 0.72, margin: 0.12 }"], home);
+  expect(config.exitCode, config.stderr).toBe(0);
+  expect(config.stdout).toContain("threshold: 0.72");
+  const list = await run(["speaker.list"], home);
+  expect(list.stdout).toContain("margin: 0.12");
+  const invalid = await run(
+    ["speaker.enroll", "{ id: 'alice', name: 'Alice', file: 'missing.wav', start: 0, end: 1 }"],
+    home,
+  );
+  expect(invalid.stderr).toContain("code: invalid_usage");
+});

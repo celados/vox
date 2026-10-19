@@ -1,6 +1,12 @@
+---
+type: Guide
+title: vox usage
+description: Agent-facing contract for transcription, speaker identity, and speech synthesis.
+---
+
 # vox
 
-Offline file transcription and TTS through Alibaba Model Studio. `vox hear`
+File transcription and TTS through Alibaba Model Studio, with local MLX speaker identification. `vox hear`
 uploads a file, transcribes it, and stores a **run**; markdown, subtitles, and
 plain text are exports from that run. There is no realtime ASR and no
 microphone capture for transcription. Files up to 12 hours are ordinary input.
@@ -57,6 +63,64 @@ vox hear --file sample.mp3 --model mimo --lang zh
 ```
 
 Expect roughly a minute per 45 minutes of audio from the DashScope file models.
+
+`hear` always writes a Markdown transcript under `~/.vox/runs/<sid>/transcript.md`
+and returns its path. Pass `output` to choose a destination.
+
+## Speaker identity (Apple Silicon)
+
+Prerequisites: `uv` and `ffmpeg` on PATH (`brew install uv ffmpeg`). ASR still
+uses DashScope; voice matching runs locally. The first enrollment or identity
+request lazily downloads the pinned model (~26 MB) and Python runtime dependencies.
+Weights live in `~/.vox/models/`, runtime files in `~/.vox/runtime/`, and download
+caches in `~/.vox/cache/uv` and `~/.vox/models/huggingface`. No PyTorch is required.
+
+Enroll one clean solo recording per person (3–30 seconds; longer files use the
+first 30 seconds by default). `start` and `end` select seconds in an existing
+recording. Both enrollment and matching remove long near-digital silence before
+feature extraction; at least 3 seconds must remain. This is an energy gate, not
+a speech/noise classifier. Keep enrollment and evaluation recordings separate when checking quality.
+
+```bash
+vox speaker.enroll "{ id: 'ethan', name: 'Ethan', file: 'ethan.wav' }"
+vox speaker.enroll "{ id: 'deniffer', name: 'Deniffer', file: 'deniffer.wav', start: 10, end: 30 }"
+vox speaker.list
+vox hear "{ file: 'meeting.m4a', identify: true, output: 'meeting.transcript.md' }"
+```
+
+`identify: true` automatically enables ASR speaker separation and matches against
+all enrolled people. Limit candidates with `speakerIds: ['ethan', 'deniffer']`.
+MiMo cannot identify speakers because it has no speaker labels.
+
+The Markdown includes timestamps and names. Anonymous IDs remain in the stored
+JSON; names and decisions are saved separately as `identified.json`. Uncertain
+matches keep `Speaker <id>`, rather than forcing a name. IDs are local to each
+recording; multiple IDs may match one person. Identity defaults (`threshold: 0.65`,
+`margin: 0.1`) are starting points, not a calibrated accuracy guarantee.
+
+```bash
+# Re-identify a stored run after enrollment/config changes; no ASR upload or charge.
+vox speaker.identify "{ sid: 'a3f1c2', output: 'meeting.transcript.md' }"
+vox speaker.config
+vox speaker.config "{ threshold: 0.7, margin: 0.1 }"
+vox speaker.enroll "{ id: 'ethan', name: 'Ethan', file: 'better.wav', replace: true }"
+vox speaker.remove --id ethan
+```
+
+`export` uses the latest saved identity snapshot for that run, including for
+SRT/VTT/TXT/JSON. Re-run `speaker.identify` to apply changes to the speaker library.
+If identity fails after ASR, the anonymous ASR run remains stored; use
+`session.list` and `speaker.identify` to resume. No meeting transcript is modified
+outside vox's own run or the explicit output destination.
+
+Profiles and matching settings are in `~/.vox/speakers.json` (private permissions).
+Source enrollment audio is not copied; only its normalized voiceprint is stored.
+Treat these profiles as personal voice data. `voice.*` is still TTS voice cloning;
+`speaker.*` is recognition identity. `VOX_HOME` overrides the state directory for
+isolated tests. All speaker artifacts use the model version recorded with the
+profiles; changing embedding models requires re-enrollment.
+
+## Result envelopes
 
 `hear` returns a YAML envelope. A short transcript is inlined as `text`. A long
 one folds to `preview` plus `$hints` naming the `vox export` command. Do not
@@ -115,7 +179,8 @@ failure exits 1 — branch on `code`, not the process status or the detail prose
 `not_authenticated` · `audio_too_large` · `audio_unsupported` ·
 `vocab_not_found` · `vocab_quota_exceeded` · `vocab_model_mismatch` ·
 `vocab_index_corrupt` · `session_not_found` · `session_ambiguous` ·
-`invalid_usage` · `io_error` · `api_error`
+`invalid_usage` · `io_error` · `api_error` · `speaker_not_found` ·
+`speaker_labels_missing` · `speaker_runtime_unavailable`
 
 `not_authenticated` → `vox auth.login`. `session_not_found` → `vox session.list`.
 

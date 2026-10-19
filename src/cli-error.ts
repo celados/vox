@@ -1,6 +1,9 @@
 import { domainError } from "@celados/argc";
 
 export type VoxErrorCode =
+  | "speaker_not_found"
+  | "speaker_runtime_unavailable"
+  | "speaker_labels_missing"
   | "not_authenticated"
   | "audio_too_large"
   | "audio_unsupported"

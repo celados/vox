@@ -1,3 +1,9 @@
+---
+type: Guide
+title: vox
+description: File transcription, local MLX speaker identity, and TTS through an agent-facing CLI.
+---
+
 # vox
 
 Agent-facing speech to text and text to speech, over Alibaba Model Studio
@@ -11,6 +17,21 @@ Transcription is content-addressed: the same audio and the same recognition
 options always resolve to the same run id, and everything after transcription
 — markdown, subtitles, plain text — is an operation on the stored run. The
 full surface contract lives in [docs/cli-schema.md](docs/cli-schema.md).
+
+## Named meeting transcripts
+
+```bash
+vox speaker.enroll "{ id: 'ethan', name: 'Ethan', file: 'ethan.wav' }"
+vox speaker.enroll "{ id: 'deniffer', name: 'Deniffer', file: 'deniffer.wav' }"
+vox hear "{ file: 'meeting.m4a', identify: true, output: 'meeting.transcript.md' }"
+```
+
+Enrollment uses 3–30 seconds of clean solo speech. Model weights and the isolated
+Python helper download on first use into `~/.vox`; matching runs on local MLX,
+while Alibaba handles transcription and anonymous speaker separation. Uncertain
+identities stay anonymous. `speaker.identify` reprocesses a stored run after
+profile changes without repeating ASR. See `vox @skill` and `vox @schema .speaker`
+for the complete contract.
 
 ## Install
 
@@ -29,7 +50,8 @@ From a GitHub Release:
 curl -fsSL https://raw.githubusercontent.com/celados/vox/main/install.sh | bash
 ```
 
-`ffmpeg`/`ffprobe` are optional: `ffprobe` reports duration for non-WAV input
+`uv` and `ffmpeg` are required for local speaker identity on Apple Silicon.
+For ordinary ASR/TTS, `ffmpeg`/`ffprobe` are optional: `ffprobe` reports duration for non-WAV input
 before upload, `ffmpeg` compresses the TTS cache and records a clone sample.
 Playback uses `afplay` on macOS, or `ffplay`/`aplay`.
 

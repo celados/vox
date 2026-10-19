@@ -1,3 +1,5 @@
+import type { Identification } from "./speakers.ts";
+
 import { basename } from "node:path";
 
 export const HTTP_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1";
@@ -50,10 +52,13 @@ export type Sentence = {
   end_time: number;
   text: string;
   speaker?: string;
+  speaker_name?: string;
+  speaker_identity?: string;
   words?: AsrWord[];
 };
 
 export type AsrResult = {
+  identification?: Identification;
   text: string;
   sentences?: Sentence[];
   duration_sec?: number;

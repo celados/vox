@@ -38,7 +38,7 @@ const auth = group(
 const hear = c
   .meta({
     description:
-      "Transcribe an audio file into a content-addressed run. Idempotent unless refresh is set",
+      "Transcribe audio into a cached run and Markdown file, optionally identify enrolled speakers",
     examples: [
       "vox hear --file meeting.m4a",
       "vox hear \"{ file: 'lecture.mp3', lang: ['zh'], speakers: true }\"",
@@ -52,11 +52,65 @@ const hear = c
         vocab: v.optional(v.string()),
         lang: v.optional(v.array(v.string())),
         speakers: v.optional(v.boolean(), false),
+        identify: v.optional(v.boolean(), false),
+        speakerIds: v.optional(v.array(v.string())),
+        output: v.optional(v.string()),
         refresh: v.optional(v.boolean(), false),
       }),
     ),
   )
   .positional("file");
+
+const speakerId = v.pipe(v.string(), v.regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/));
+const seconds = v.pipe(v.number(), v.minValue(0));
+const ratio = v.pipe(v.number(), v.minValue(0), v.maxValue(1));
+const speaker = group(
+  { description: "Enroll and identify speakers locally on Apple Silicon with MLX" },
+  {
+    enroll: c
+      .meta({
+        description: "Enroll a named speaker from 3–30 seconds of clean solo audio",
+        examples: ["vox speaker.enroll \"{ id: 'ethan', name: 'Ethan', file: 'ethan.wav' }\""],
+      })
+      .input(
+        s(
+          v.object({
+            id: speakerId,
+            name: v.pipe(v.string(), v.minLength(1)),
+            file: v.pipe(v.string(), v.minLength(1)),
+            start: v.optional(seconds, 0),
+            end: v.optional(seconds),
+            replace: v.optional(v.boolean(), false),
+          }),
+        ),
+      ),
+    list: c
+      .meta({ description: "List enrolled speaker IDs, names and matching settings" })
+      .input(s(v.object({}))),
+    remove: c
+      .meta({ description: "Remove an enrolled speaker by ID" })
+      .input(s(v.object({ id: speakerId })))
+      .positional("id"),
+    config: c
+      .meta({ description: "Read or update cosine threshold and minimum candidate margin" })
+      .input(s(v.object({ threshold: v.optional(ratio), margin: v.optional(ratio) }))),
+    identify: c
+      .meta({
+        description: "Identify speakers in a stored run without uploading or repeating ASR",
+        examples: ["vox speaker.identify \"{ sid: 'a3f1c2', output: 'meeting.transcript.md' }\""],
+      })
+      .input(
+        s(
+          v.object({
+            sid: v.pipe(v.string(), v.minLength(1)),
+            speakerIds: v.optional(v.array(speakerId)),
+            output: v.optional(v.string()),
+          }),
+        ),
+      )
+      .positional("sid"),
+  },
+);
 
 const session = group(
   { description: "Inspect and delete stored transcription runs" },
@@ -206,6 +260,7 @@ export const schema = {
   status,
   auth,
   hear,
+  speaker,
   session,
   export: exportCmd,
   vocab,

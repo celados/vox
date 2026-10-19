@@ -83,7 +83,9 @@ function sanitize(words: AsrWord[]): AsrWord[] {
 export function render(rec: RunRecord, format: string): string {
   switch (format) {
     case "txt":
-      return rec.result.text + "\n";
+      return rec.result.sentences?.some((s) => s.speaker !== undefined)
+        ? rec.result.sentences.map((s) => `${speakerPrefix(s)}${s.text}`).join("\n") + "\n"
+        : rec.result.text + "\n";
     case "json":
       return JSON.stringify(rec, null, 2) + "\n";
     case "md":
@@ -117,7 +119,7 @@ function fromSentences(sentences: Sentence[]): Cue[] {
   for (const sentence of sentences) {
     let text = sentence.text.trim();
     if (!text) continue;
-    if (sentence.speaker) text = `[${sentence.speaker}] ${text}`;
+    text = speakerPrefix(sentence) + text;
     const duration = sentence.end_time - sentence.begin_time;
     if ([...text].length <= MAX_CUE_RUNES && duration <= MAX_CUE_DURATION_MS) {
       cues.push({
@@ -128,12 +130,22 @@ function fromSentences(sentences: Sentence[]): Cue[] {
       });
       continue;
     }
+    const split = segment(sentence.words ?? []);
+    if (split.length === 0) {
+      cues.push({
+        index: cues.length + 1,
+        beginMs: sentence.begin_time,
+        endMs: sentence.end_time,
+        text,
+      });
+      continue;
+    }
     let first = true;
-    for (const cue of segment(sentence.words ?? [])) {
+    for (const cue of split) {
       const next = { ...cue, index: cues.length + 1 };
       // Prefix the first split cue of this sentence, not of the whole file.
-      if (sentence.speaker && first) {
-        next.text = `[${sentence.speaker}] ${next.text}`;
+      if (sentence.speaker !== undefined && first) {
+        next.text = speakerPrefix(sentence) + next.text;
         first = false;
       }
       cues.push(next);
@@ -149,10 +161,20 @@ export function renderMarkdown(rec: RunRecord): string {
     source: rec.meta.source,
     model: rec.meta.model,
     ...(rec.meta.vocab ? { vocab: rec.meta.vocab } : {}),
+    ...(rec.result.identification ? { identification: rec.result.identification } : {}),
     duration: formatDuration(rec.meta.size.duration * 1000),
     generated: { by: "vox", at: toRfc3339(rec.meta.created) },
   });
 
+  if (rec.result.sentences?.some((s) => s.speaker !== undefined)) {
+    const lines = rec.result.sentences
+      .filter((s) => s.text.trim())
+      .map(
+        (sentence) =>
+          `[${vttTime(sentence.begin_time).split(".")[0]}] ${speakerPrefix(sentence)}${sentence.text.trim()}`,
+      );
+    return `---\n${head}---\n\n${lines.join("\n\n")}\n`;
+  }
   let body = "";
   const units = cuesOf(rec);
   if (units.length === 0) {
@@ -170,6 +192,13 @@ export function renderMarkdown(rec: RunRecord): string {
   }
   if (para) body += para + "\n";
   return `---\n${head}---\n\n${body}`;
+}
+
+function speakerPrefix(sentence: Sentence): string {
+  const label =
+    sentence.speaker_name ??
+    (sentence.speaker !== undefined ? `Speaker ${sentence.speaker}` : undefined);
+  return label ? `[${label}] ` : "";
 }
 
 export function renderSrt(cues: Cue[]): string {

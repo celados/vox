@@ -1,7 +1,7 @@
 import { extname, resolve } from "node:path";
 
 import { durationSeconds, isSupportedFormat, supportedFormats } from "./audio.ts";
-import { voxError } from "./cli-error.ts";
+import { VoxError, voxError } from "./cli-error.ts";
 import { requireApiKey, requireMimoApiKey, type AppConfig } from "./config.ts";
 import {
   DashScopeClient,
@@ -11,7 +11,7 @@ import {
   resolveModel,
 } from "./dashscope.ts";
 import { MimoClient, MODEL_MIMO_ASR, mimoAudioData, mimoLanguage } from "./mimo.ts";
-import { tilde } from "./paths.ts";
+import { expandHome, tilde } from "./paths.ts";
 import {
   digestOf,
   loadRun,
@@ -24,6 +24,7 @@ import {
   type Args,
   type RunRecord,
 } from "./run-store.ts";
+import { identificationSettings, identifyResult, writeTranscript } from "./speakers.ts";
 import { contentHash, loadVocabulary, resolveWords, syncVocabulary } from "./vocab.ts";
 
 export const FOLD_TOKENS = 2000;
@@ -36,9 +37,36 @@ export type HearInput = {
   lang?: string[];
   speakers?: boolean;
   refresh?: boolean;
+  identify?: boolean;
+  speakerIds?: string[];
+  output?: string;
 };
 
 export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
+  const identify = input.identify ?? false;
+  if (input.speakerIds && !identify)
+    throw voxError("invalid_usage", "speakerIds requires identify: true");
+  if (identify && input.model === "mimo")
+    throw voxError("invalid_usage", "MiMo has no speaker labels; use fun or qwen");
+  const settings = identify ? await identificationSettings(app.dir, input.speakerIds) : undefined;
+  const rec = await transcribeRun(app, { ...input, speakers: identify || input.speakers });
+  const audio = resolve(runDir(newStore(app.dir), rec.meta.sid), `audio.${rec.args.format}`);
+  let annotated = rec;
+  try {
+    if (settings)
+      annotated = { ...rec, result: await identifyResult(app.dir, audio, rec.result, settings) };
+  } catch (error) {
+    if (error instanceof VoxError)
+      throw error.withHint(
+        `ASR run ${rec.meta.sid} is saved. Retry with vox speaker.identify --sid ${rec.meta.sid}`,
+      );
+    throw error;
+  }
+  const files = await writeTranscript(app.dir, annotated, input.output, identify);
+  return { ...(envelope(annotated) as Record<string, unknown>), ...files };
+}
+
+export async function transcribeRun(app: AppConfig, input: HearInput): Promise<RunRecord> {
   const vendor = input.model ?? "fun";
   const model = vendor === "mimo" ? MODEL_MIMO_ASR : resolveModel(vendor);
   if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
@@ -76,7 +104,7 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
     try {
       const rec = await loadRun(store, sid, digest);
       console.error("stored");
-      return envelope(rec);
+      return rec;
     } catch {
       // miss, digest collision, or corrupt — fall through to recognize
     }
@@ -141,7 +169,7 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
       `cannot save run: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  return envelope(rec);
+  return rec;
 }
 
 function validateMimoRequest(data: Uint8Array, format: string, input: HearInput): void {
@@ -185,7 +213,7 @@ export function envelope(rec: RunRecord): unknown {
 async function readAudio(
   file: string,
 ): Promise<{ data: Uint8Array; format: string; source: string }> {
-  const source = resolve(file);
+  const source = resolve(expandHome(file));
   let data: Uint8Array;
   try {
     data = new Uint8Array(await Bun.file(source).arrayBuffer());

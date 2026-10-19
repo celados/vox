@@ -1,10 +1,12 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const APP_DIR = ".vox";
 
 export function voxHome(): string {
-  return join(homedir(), APP_DIR);
+  return process.env.VOX_HOME
+    ? resolve(expandHome(process.env.VOX_HOME))
+    : join(homedir(), APP_DIR);
 }
 
 export function expandHome(path: string): string {

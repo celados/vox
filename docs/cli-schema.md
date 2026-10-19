@@ -6,8 +6,8 @@ description: >
   agent-facing STT/TTS tool. Runs are content-addressed; everything after
   transcription is an operation on a stored run.
 status: accepted
-version: 1.1
-generated: { by: grok/grok-4.6, at: 2026-08-19T00:00:00Z }
+version: 1.2
+generated: { by: codex, at: 2026-10-16T00:00:00Z }
 ---
 
 # vox CLI surface
@@ -30,64 +30,9 @@ Four invariants the whole surface is built on:
 
 ## Schema
 
-```ts
-type Vox = {
-  /** Preflight: { authenticated: false } or { service: 'dashscope' }. */
-  status();
-
-  auth: {
-    login(input: { token?: string });
-    logout();
-    status();
-  };
-
-  hear(input: {
-    file: string;
-    model?: "fun" | "qwen";
-    vocab?: string;
-    lang?: string[];
-    speakers?: boolean;
-    refresh?: boolean;
-  });
-
-  session: {
-    list(input: { file?: string; limit?: number });
-    remove(input: { sid?: string; all?: boolean });
-  };
-
-  export(input: { sid: string; format: "srt" | "vtt" | "md" | "txt" | "json"; output?: string });
-
-  vocab: {
-    list();
-    sync(input: { name?: string; all?: boolean; model?: "fun" | "qwen"; force?: boolean });
-    prune(input: { dryRun?: boolean });
-  };
-
-  say(input: {
-    text: string;
-    voice?: string;
-    lang?: string;
-    instruct?: string;
-    speed?: number;
-    output?: string;
-    noCache?: boolean;
-  });
-
-  voice: {
-    list();
-    record(input: { file?: string; name?: string; lang?: string; duration?: number });
-    remove(input: { voiceId: string });
-  };
-
-  cache: {
-    status();
-    clear();
-  };
-};
-```
-
-`say`, `voice` and `cache` are the legacy TTS surface. `cache` exists only
-because TTS has not been moved onto runs yet.
+The authoritative types and descriptions are [src/schema.ts](../src/schema.ts).
+Use `vox @schema`, or `vox @schema .speaker` for local identity commands.
+The embedded usage guide is [src/index.md](../src/index.md), served by `vox @skill`.
 
 ## Recognition
 
@@ -111,6 +56,32 @@ then an `oss://` URL that lives 48 hours.
 **Client-side chunking is not a fallback.** It truncates the word at every cut
 and forfeits native segmentation. It is justified only above the 12-hour cap.
 
+## Speaker identity
+
+`hear` writes a Markdown transcript and returns its path; `output` chooses the
+file destination. `identify: true` implies `speakers: true`, then matches selected
+clean 3–10 second excerpts against enrolled profiles with a local MLX model.
+`speaker.enroll` accepts a stable ID, display name, and 3–30 seconds of solo audio.
+`speaker.config` controls minimum cosine similarity and candidate margin.
+
+Identity is a separate projection, never part of the ASR cache key. Original
+`sentence.speaker` stays unchanged; `speaker_identity` and `speaker_name` annotate
+matches. `result.identification` records the model, profile fingerprint, thresholds,
+matching time, and per-speaker decisions. Unknown/ambiguous or internally
+inconsistent clusters keep anonymous labels. Multiple clusters may identify one
+person. Threshold defaults require calibration on actual meeting audio.
+
+`speaker.identify` works on a stored run, without cloud credentials or another ASR
+request. `export` uses the latest saved identity projection when present; profile
+changes do not retroactively rewrite an existing snapshot. Re-identify explicitly.
+If local identity fails, the ASR run remains saved and recoverable.
+
+The runtime and model download lazily under `~/.vox`; `uv` and `ffmpeg` are host
+prerequisites on Apple Silicon macOS. The model source is pinned and SHA256-verified;
+conversion only reads ONNX tensor data, never remote code. Runtime dependencies are
+locked; bundles embed the Python helper and dependency lock. `VOX_HOME` overrides
+the state directory for isolated execution.
+
 ## Output contract
 
 | Stream | Carries                                                                                            |
@@ -133,7 +104,8 @@ hint: vox vocab.sync --name meeting --model fun
 Codes: `invalid_usage`, `not_authenticated`, `audio_too_large`,
 `audio_unsupported`, `vocab_not_found`, `vocab_quota_exceeded`,
 `vocab_model_mismatch`, `vocab_index_corrupt`, `session_not_found`,
-`session_ambiguous`, `io_error`, `api_error`.
+`session_ambiguous`, `io_error`, `api_error`, `speaker_not_found`,
+`speaker_labels_missing`, `speaker_runtime_unavailable`.
 
 Failures exit 1. Branch on `code`, not a numeric exit class.
 
@@ -145,10 +117,17 @@ An index command emits `[]` rather than nothing when empty.
 ~/.vox/
   config.json
   state.json
+  speakers.json
+  models/
+    wespeaker-resnet34-lm-v1/
+    huggingface/
+  runtime/<helper-hash>/
   runs/<sid>/
     meta.yaml
     audio.<ext>
     run.json
+    transcript.md
+    identified.json     # optional local identity projection
   vocabulary/
     <name>.yaml
     .index.json
