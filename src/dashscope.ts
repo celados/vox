@@ -4,7 +4,7 @@ import { basename } from "node:path";
 
 export const HTTP_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1";
 export const MODEL_FUN_ASR = "fun-asr";
-export const MODEL_QWEN_AUDIO_FILE = "qwen-audio-3.0-asr-flash-filetrans";
+export const MODEL_QWEN_AUDIO_FILE = "qwen-audio-3.1-asr-flash-filetrans";
 export const MODEL_FLASH_REALTIME = "qwen3-tts-flash-realtime";
 export const MODEL_INSTRUCT_REALTIME = "qwen3-tts-instruct-flash-realtime";
 export const MODEL_VC_REALTIME = "qwen3-tts-vc-realtime-2026-01-15";

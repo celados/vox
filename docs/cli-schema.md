@@ -42,7 +42,7 @@ store, submit an async task, poll it, keep the result.
 |              |                                                                             |
 | ------------ | --------------------------------------------------------------------------- |
 | Endpoint     | `audio/asr/transcription`, `X-DashScope-Async: enable`                      |
-| Vendors      | `fun` → `fun-asr` (default) · `qwen` → `qwen-audio-3.0-asr-flash-filetrans` |
+| Vendors      | `fun` → `fun-asr` (default) · `qwen` → `qwen-audio-3.1-asr-flash-filetrans` |
 | Cap          | 12 h / 2 GB                                                                 |
 | Segmentation | native, timestamped sentences                                               |
 | Per word     | text, timings, punctuation, confidence                                      |
@@ -97,7 +97,7 @@ Errors are argc domain envelopes on stderr:
 ```yaml
 error: DOMAIN_ERROR
 code: vocab_model_mismatch
-detail: list vocab-meeting-8e74 was built for qwen-audio-3.0-asr-flash-filetrans, not fun-asr
+detail: list vocab-meeting-8e74 was built for qwen-audio-3.1-asr-flash-filetrans, not fun-asr
 hint: vox vocab.sync --name meeting --model fun
 ```
 

@@ -100,7 +100,7 @@ to completion — roughly a minute per 45 minutes of audio.
 | `model`         | Model                                | Hotword lists | Super hotwords  | Diarization |
 | --------------- | ------------------------------------ | ------------- | --------------- | ----------- |
 | `fun` (default) | `fun-asr`                            | yes           | no              | yes         |
-| `qwen`          | `qwen-audio-3.0-asr-flash-filetrans` | yes           | yes (weight 50) | yes         |
+| `qwen`          | `qwen-audio-3.1-asr-flash-filetrans` | yes           | yes (weight 50) | yes         |
 
 Both cap at 12 hours / 2GB.
 
