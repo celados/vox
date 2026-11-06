@@ -7,11 +7,13 @@ import packageJson from "../package.json" with { type: "json" };
 
 const ENTRY = join(import.meta.dir, "main.ts");
 
-async function run(args: string[], home?: string) {
+async function run(args: string[], home?: string, env: Record<string, string> = {}) {
+  // Provider keys come only from what a test passes; the latch source is off under bun test.
+  const { DASHSCOPE_API_KEY: _d, MIMO_API_KEY: _m, ...inherited } = process.env;
   const proc = Bun.spawn(["bun", "run", ENTRY, ...args], {
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, HOME: home ?? process.env.HOME },
+    env: { ...inherited, NODE_ENV: "test", HOME: home ?? process.env.HOME, ...env },
   });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -32,8 +34,6 @@ test("@schema exposes the dotted command surface", async () => {
   expect(exitCode, stderr).toBe(0);
   for (const fragment of [
     "status()",
-    "auth:",
-    "login(",
     "hear(input: {",
     "session:",
     "list(",
@@ -50,6 +50,10 @@ test("@schema exposes the dotted command surface", async () => {
     expect(stdout).toContain(fragment);
   }
   expect(stdout).not.toContain("dashscope(");
+  expect(stdout).not.toContain("auth:");
+  expect(stdout).toContain("values:");
+  expect(stdout).toContain("DASHSCOPE_API_KEY");
+  expect(stdout).toContain("MIMO_API_KEY");
 });
 
 test("@skill prints the embedded guide", async () => {
@@ -59,28 +63,31 @@ test("@skill prints the embedded guide", async () => {
   expect(stdout).toContain("There is no realtime ASR");
 });
 
-test("status discloses unauthenticated without token material", async () => {
+test("status reports each provider key without key material", async () => {
   const home = await mkdtemp(join(tmpdir(), "vox-home-"));
-  const { stdout, stderr, exitCode } = await run(["status"], home);
+  const { stdout, stderr, exitCode } = await run(["status"], home, {
+    MIMO_API_KEY: "mimo-test-key",
+  });
   expect(exitCode, stderr).toBe(0);
-  expect(stdout).toContain("authenticated: false");
-  expect(stdout).not.toContain("api_key");
-  expect(stdout).not.toContain("sk-");
+  expect(stdout).toMatch(/mimo:\s*\n\s*available: true/);
+  expect(stdout).toMatch(/dashscope:\s*\n\s*available: false/);
+  expect(stdout).toContain("disabled_in_test");
+  expect(stdout).not.toContain("mimo-test-key");
 });
 
 test("schema exposes MiMo as an ASR provider", async () => {
   const { stdout, stderr, exitCode } = await run(["@schema"]);
   expect(exitCode, stderr).toBe(0);
   expect(stdout).toContain('model?: "fun" | "qwen" | "mimo"');
-  expect(stdout).toContain('service?: "dashscope" | "mimo"');
 });
 
-test("hear without credentials is not_authenticated", async () => {
+test("a command needing a missing key fails with value_unavailable", async () => {
   const home = await mkdtemp(join(tmpdir(), "vox-home-"));
-  const { stderr, exitCode } = await run(["hear", "--file", "missing.wav"], home);
+  const { stderr, exitCode } = await run(["vocab.prune", "--dryRun"], home);
   expect(exitCode).toBe(1);
   expect(stderr).toContain("error: DOMAIN_ERROR");
-  expect(stderr).toContain("code: not_authenticated");
+  expect(stderr).toContain("code: value_unavailable");
+  expect(stderr).toContain("DASHSCOPE_API_KEY");
 });
 
 test("session.remove rejects path traversal before touching the filesystem", async () => {

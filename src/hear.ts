@@ -2,7 +2,7 @@ import { extname, resolve } from "node:path";
 
 import { durationSeconds, isSupportedFormat, supportedFormats } from "./audio.ts";
 import { VoxError, voxError } from "./cli-error.ts";
-import { requireApiKey, requireMimoApiKey, type AppConfig } from "./config.ts";
+import { type AppConfig } from "./config.ts";
 import {
   DashScopeClient,
   DIARIZATION_MAX_SECONDS,
@@ -12,6 +12,7 @@ import {
 } from "./dashscope.ts";
 import { MimoClient, MODEL_MIMO_ASR, mimoAudioData, mimoLanguage } from "./mimo.ts";
 import { expandHome, tilde } from "./paths.ts";
+import { secret } from "./values.ts";
 import {
   digestOf,
   loadRun,
@@ -70,7 +71,6 @@ export async function transcribeRun(app: AppConfig, input: HearInput): Promise<R
   const vendor = input.model ?? "fun";
   const model = vendor === "mimo" ? MODEL_MIMO_ASR : resolveModel(vendor);
   if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
-  const apiKey = vendor === "mimo" ? requireMimoApiKey(app) : requireApiKey(app);
 
   const { data, format, source } = await readAudio(input.file);
   const durationSec = await durationSeconds(source, data);
@@ -113,6 +113,8 @@ export async function transcribeRun(app: AppConfig, input: HearInput): Promise<R
     console.error("duration unknown; the service will report it");
   }
 
+  // Stored runs replay offline; only a real recognition needs the provider key.
+  const apiKey = await (vendor === "mimo" ? secret.MIMO_API_KEY : secret.DASHSCOPE_API_KEY);
   const client = vendor === "mimo" ? undefined : new DashScopeClient(apiKey);
   let vocabularyId = "";
   if (loadedVocab && args.vocab) {

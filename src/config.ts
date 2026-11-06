@@ -4,21 +4,6 @@ import { join } from "node:path";
 import { voxError } from "./cli-error.ts";
 import { voxHome } from "./paths.ts";
 
-export type DashScopeConfig = {
-  api_key?: string;
-};
-
-export type MimoConfig = {
-  api_key?: string;
-};
-
-export type AppFile = {
-  services: {
-    dashscope?: DashScopeConfig;
-    mimo?: MimoConfig;
-  };
-};
-
 export type StateFile = {
   last_voice?: string;
   last_lang?: string;
@@ -26,57 +11,20 @@ export type StateFile = {
 
 export type AppConfig = {
   dir: string;
-  config: AppFile;
   state: StateFile;
 };
-
-const emptyConfig = (): AppFile => ({ services: {} });
 
 export async function loadConfig(dir = voxHome()): Promise<AppConfig> {
   await mkdir(dir, { recursive: true });
   await mkdir(join(dir, "voices"), { recursive: true });
   await mkdir(join(dir, "cache"), { recursive: true });
 
-  const config = await readJson<AppFile>(join(dir, "config.json"), emptyConfig());
   const state = await readJson<StateFile>(join(dir, "state.json"), {});
-  return { dir, config, state };
-}
-
-export async function saveConfig(app: AppConfig): Promise<void> {
-  await writeSecretJson(join(app.dir, "config.json"), app.config);
+  return { dir, state };
 }
 
 export async function saveState(app: AppConfig): Promise<void> {
-  await writeSecretJson(join(app.dir, "state.json"), app.state);
-}
-
-export function requireApiKey(app: AppConfig): string {
-  const key = app.config.services.dashscope?.api_key;
-  if (!key) {
-    throw voxError("not_authenticated", "no DashScope credentials stored", "vox auth.login");
-  }
-  return key;
-}
-
-export function requireMimoApiKey(app: AppConfig): string {
-  const key = app.config.services.mimo?.api_key;
-  if (!key) {
-    throw voxError(
-      "not_authenticated",
-      "no Xiaomi MiMo credentials stored",
-      "vox auth.login --service mimo",
-    );
-  }
-  return key;
-}
-
-export async function clearCredentials(
-  app: AppConfig,
-  service?: "dashscope" | "mimo",
-): Promise<void> {
-  if (!service) app.config.services = {};
-  else delete app.config.services[service];
-  await saveConfig(app);
+  await writePrivateJson(join(app.dir, "state.json"), app.state);
 }
 
 async function readJson<T>(path: string, fallback: T): Promise<T> {
@@ -100,7 +48,7 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-async function writeSecretJson(path: string, value: unknown): Promise<void> {
+async function writePrivateJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
   await chmod(path, 0o600);
 }

@@ -26,7 +26,7 @@ Global `vox` on this machine is **`bun link`** → `package.json` `bin` →
 
 ## Storage
 
-On-disk state stays at `~/.vox/` (config, runs, vocabularies, TTS cache). The
+On-disk state stays at `~/.vox/` (state, runs, vocabularies, TTS cache). The
 TypeScript rewrite reads the same run layout as before: `runs/<sid>/meta.yaml`,
 `run.json`, `audio.<ext>`. Run ids are still
 `sha256(audio || Go-shaped args JSON)` so existing stored runs remain cache hits.
@@ -36,6 +36,7 @@ Playback uses `afplay` (macOS) or `ffplay`/`aplay`. Microphone enrollment uses
 
 ## Testing
 
-`bun test` is offline: store, vocab, export, schema, unauthenticated CLI
-paths. Live DashScope calls are not mocked — run `vox hear` / `vox say` by hand
+`bun test` is offline: store, vocab, export, schema, keyless CLI paths. Provider
+keys come from `src/values.ts` (env, then latch `celados-agent`); tests pass env
+vars and never call latch. Live DashScope calls are not mocked — run `vox hear` / `vox say` by hand
 against a real key.
