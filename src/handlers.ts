@@ -1,13 +1,7 @@
 import { writeFile } from "node:fs/promises";
 
 import { voxError } from "./cli-error.ts";
-import {
-  clearCredentials,
-  loadConfig,
-  requireApiKey,
-  saveConfig,
-  type AppConfig,
-} from "./config.ts";
+import { loadConfig, type AppConfig } from "./config.ts";
 import { DashScopeClient, resolveModel, VOCABULARY_QUOTA } from "./dashscope.ts";
 import { render } from "./export.ts";
 import { hear } from "./hear.ts";
@@ -19,10 +13,9 @@ import {
   loadIdentifiedRun,
   removeSpeaker,
 } from "./speakers.ts";
-import { MimoClient } from "./mimo.ts";
-import { promptSecret } from "./prompt.ts";
 import { listRuns, loadRun, newStore, removeAllRuns, removeRun, resolveSid } from "./run-store.ts";
 import type { AppHandlers } from "./schema.ts";
+import { isValueUnavailable, secret } from "./values.ts";
 import { cacheClear, cacheStatus, listVoices, recordVoice, removeVoice, say } from "./tts.ts";
 import {
   describeIndex,
@@ -37,13 +30,7 @@ import {
 } from "./vocab.ts";
 
 export const handlers: AppHandlers = {
-  status: async () => await authStatus(),
-  auth: {
-    login: async (options) =>
-      await authLogin(options.input.token, options.input.service ?? "dashscope"),
-    logout: async (options) => await authLogout(options.input.service ?? "dashscope"),
-    status: async () => await authStatus(),
-  },
+  status: async () => await providerStatus(),
   hear: async (options) => {
     const app = await loadConfig();
     return await hear(app, options.input);
@@ -98,59 +85,20 @@ export const handlers: AppHandlers = {
   },
 };
 
-async function authStatus(): Promise<Record<string, unknown>> {
-  const app = await loadConfig();
-  const services = (["dashscope", "mimo"] as const).filter((service) =>
-    Boolean(app.config.services[service]?.api_key),
+async function providerStatus(): Promise<Record<string, unknown>> {
+  const providers = { dashscope: "DASHSCOPE_API_KEY", mimo: "MIMO_API_KEY" } as const;
+  const entries = await Promise.all(
+    Object.entries(providers).map(async ([provider, value]) => {
+      try {
+        await secret[value];
+        return [provider, { available: true }] as const;
+      } catch (error) {
+        if (!isValueUnavailable(error)) throw error;
+        return [provider, { available: false, tried: error.envelope.tried }] as const;
+      }
+    }),
   );
-  if (services.length === 0) return { authenticated: false };
-  if (services.length === 1) return { service: services[0] };
-  return { services };
-}
-
-async function authLogin(
-  token: string | undefined,
-  service: "dashscope" | "mimo",
-): Promise<Record<string, unknown>> {
-  const environmentValue =
-    service === "mimo" ? process.env.MIMO_API_KEY : process.env.DASHSCOPE_API_KEY;
-  // Environment injection keeps shared credentials out of argv and shell history.
-  let value = token?.trim() || environmentValue?.trim() || "";
-  if (!value)
-    value = await promptSecret(
-      service === "mimo" ? "Xiaomi MiMo API Key: " : "DashScope API Key: ",
-    );
-  if (!value)
-    throw voxError(
-      "invalid_usage",
-      "API key is required",
-      service === "mimo"
-        ? "set MIMO_API_KEY or run vox auth.login --service mimo interactively"
-        : "set DASHSCOPE_API_KEY or run vox auth.login interactively",
-    );
-
-  console.error("validating...");
-  try {
-    if (service === "mimo") await new MimoClient(value).validate();
-    else await new DashScopeClient(value).validate();
-  } catch (error) {
-    throw voxError(
-      "api_error",
-      `invalid credentials: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-
-  const app = await loadConfig();
-  app.config.services[service] = { api_key: value };
-  await saveConfig(app);
-  return { service };
-}
-
-async function authLogout(service: "dashscope" | "mimo"): Promise<Record<string, unknown>> {
-  const app = await loadConfig();
-  if (!app.config.services[service]?.api_key) return { service, cleared: false };
-  await clearCredentials(app, service);
-  return { service, cleared: true };
+  return Object.fromEntries(entries);
 }
 
 async function sessionRemove(
@@ -237,13 +185,10 @@ async function vocabList(): Promise<unknown> {
 
 async function quotaUsage(app: AppConfig): Promise<string> {
   try {
-    const key = requireApiKey(app);
-    const remote = await new DashScopeClient(key).listVocabularies();
+    const remote = await new DashScopeClient(await secret.DASHSCOPE_API_KEY).listVocabularies();
     return `${remote.length}/${VOCABULARY_QUOTA}`;
   } catch (error) {
-    if (error instanceof Error && error.name === "not_authenticated") {
-      return "unknown (not authenticated)";
-    }
+    if (isValueUnavailable(error)) return "unknown (DASHSCOPE_API_KEY unavailable)";
     return `unknown (${error instanceof Error ? error.message : String(error)})`;
   }
 }
@@ -255,7 +200,7 @@ async function vocabSync(input: {
   force?: boolean;
 }): Promise<unknown> {
   const app = await loadConfig();
-  const apiKey = requireApiKey(app);
+  const apiKey = await secret.DASHSCOPE_API_KEY;
   const vendor = input.model ?? "fun";
   const model = resolveModel(vendor);
   if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
@@ -290,7 +235,7 @@ async function vocabSync(input: {
 
 async function vocabPrune(dryRun: boolean): Promise<unknown> {
   const app = await loadConfig();
-  const apiKey = requireApiKey(app);
+  const apiKey = await secret.DASHSCOPE_API_KEY;
   const orphans = await pruneVocabularies(new DashScopeClient(apiKey), app.dir, dryRun);
   return { orphans, dryRun };
 }

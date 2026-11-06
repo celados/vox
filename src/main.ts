@@ -8,12 +8,14 @@ import { handlers } from "./handlers.ts";
 import { schema } from "./schema.ts";
 import { embedSkill } from "./skill.embed.ts" with { type: "macro" };
 import { rewriteSayTextArgv } from "./text-body.ts";
+import { secret } from "./values.ts";
 
 const app = cli(schema, {
   name: "vox",
   version: packageJson.version,
   description: "Agent-facing speech to text and text to speech over Alibaba Model Studio.",
   skill: embedSkill(),
+  values: secret,
 });
 
 const argv = rewriteSayTextArgv(process.argv.slice(2));

@@ -20,15 +20,12 @@ vox @schema
 vox status
 ```
 
-Unauthenticated status is only `{ authenticated: false }`. Authenticated status
-lists the configured provider or providers — never token material.
-
-```bash
-vox auth.login                  # TTY: prompts for the key
-vox auth.login --token sk-...   # non-TTY
-vox auth.login --service mimo   # Xiaomi MiMo API
-MIMO_API_KEY=... vox auth.login --service mimo  # safe environment injection
-```
+Provider keys need no setup. Each is read when a command first calls that
+provider: the env var (`DASHSCOPE_API_KEY`, `MIMO_API_KEY`) if set, else the
+celados-agent vault through latch. `@schema` frontmatter lists them under
+`values:`. `vox status` resolves both and shows, per provider, `available` or
+the sources it `tried` — never key material. Stored runs, `export`, `session.*`,
+`speaker.*` and cached `say` need no key.
 
 ## Speech to text
 
@@ -176,13 +173,14 @@ System voices: Cherry, Ethan, Chelsie, Serena (zh/en), Dylan (Beijing), Jada
 Domain refusals carry `error: DOMAIN_ERROR` and a matchable `code`. Every
 failure exits 1 — branch on `code`, not the process status or the detail prose:
 
-`not_authenticated` · `audio_too_large` · `audio_unsupported` ·
+`value_unavailable` · `audio_too_large` · `audio_unsupported` ·
 `vocab_not_found` · `vocab_quota_exceeded` · `vocab_model_mismatch` ·
 `vocab_index_corrupt` · `session_not_found` · `session_ambiguous` ·
 `invalid_usage` · `io_error` · `api_error` · `speaker_not_found` ·
 `speaker_labels_missing` · `speaker_runtime_unavailable`
 
-`not_authenticated` → `vox auth.login`. `session_not_found` → `vox session.list`.
+`value_unavailable` names the key and every source tried; report it to a person
+rather than hunting for the key yourself. `session_not_found` → `vox session.list`.
 
 ## Anti-patterns
 

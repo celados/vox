@@ -7,33 +7,14 @@ import * as v from "valibot";
 const s = toStandardJsonSchema;
 const hearVendor = v.optional(v.picklist(["fun", "qwen", "mimo"]), "fun");
 const dashscopeVendor = v.optional(v.picklist(["fun", "qwen"]), "fun");
-const service = v.optional(v.picklist(["dashscope", "mimo"]), "dashscope");
 
 const status = c
   .meta({
-    description: "Preflight disclosure: authenticated false alone, or configured providers",
+    description:
+      "Preflight: whether each provider key resolves (env, then vault), with sources tried. Never prints key material",
     examples: ["vox status"],
   })
   .input(s(v.object({})));
-
-const auth = group(
-  { description: "Authenticate speech providers" },
-  {
-    login: c
-      .meta({
-        description:
-          "Store and validate a provider API key. Prompts on a TTY when token is omitted",
-        examples: ["vox auth.login", "vox auth.login --service mimo"],
-      })
-      .input(s(v.object({ token: v.optional(v.string()), service }))),
-    logout: c
-      .meta({ description: "Clear credentials for one provider" })
-      .input(s(v.object({ service }))),
-    status: c
-      .meta({ description: "Disclose configured providers without token material" })
-      .input(s(v.object({}))),
-  },
-);
 
 const hear = c
   .meta({
@@ -258,7 +239,6 @@ const cache = group(
 
 export const schema = {
   status,
-  auth,
   hear,
   speaker,
   session,

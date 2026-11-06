@@ -58,7 +58,7 @@ Playback uses `afplay` on macOS, or `ffplay`/`aplay`.
 ## Quick Start
 
 ```bash
-vox auth.login                 # prompts, validates, then stores the key
+vox status                     # which provider keys resolve (env, then latch)
 
 vox hear --file meeting.wav    # → YAML envelope with the run id
 vox export --sid a3f1c2 --format srt
@@ -151,7 +151,6 @@ vox cache.status
 
 ```
 ~/.vox/
-  config.json          credentials (0600)
   runs/<sid>/          meta.yaml · audio.<ext> · run.json
   vocabulary/          <name>.yaml + .index.json
   cache/               TTS audio

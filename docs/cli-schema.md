@@ -101,7 +101,7 @@ detail: list vocab-meeting-8e74 was built for qwen-audio-3.1-asr-flash-filetrans
 hint: vox vocab.sync --name meeting --model fun
 ```
 
-Codes: `invalid_usage`, `not_authenticated`, `audio_too_large`,
+Codes: `invalid_usage`, `value_unavailable`, `audio_too_large`,
 `audio_unsupported`, `vocab_not_found`, `vocab_quota_exceeded`,
 `vocab_model_mismatch`, `vocab_index_corrupt`, `session_not_found`,
 `session_ambiguous`, `io_error`, `api_error`, `speaker_not_found`,
@@ -115,7 +115,6 @@ An index command emits `[]` rather than nothing when empty.
 
 ```
 ~/.vox/
-  config.json
   state.json
   speakers.json
   models/
