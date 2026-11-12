@@ -1,5 +1,5 @@
 import { createLatch } from "@celados/argc-latch";
-import { env, secret } from "@celados/argc/ref";
+import { addGlobalDefs, env, secret } from "@celados/argc/ref";
 import * as v from "valibot";
 
 import { voxError } from "./cli-error.ts";
@@ -33,23 +33,29 @@ const keyField = (provider: Provider) =>
     default: providers[provider].default,
   });
 
+const chains = (keys: readonly Provider[]) =>
+  keys.map((name) => `${name} ${providers[name].default.join(" → ")}`).join("; ");
+
+/**
+ * Both key fields are named once (`addGlobalDefs`): `@schema` declares
+ * `type DashScopeKey` / `type ProviderKey` with grammar and default chain one
+ * time, and each command shows `apiKey?: DashScopeKey | ProviderKey`.
+ */
+const DashScopeKey = keyField("dashscope");
+const ProviderKey = secret(key, resolvers, {
+  description: `Key for the provider the command calls (DashScope; MiMo for hear model mimo). Omitted → read only when a provider is actually called — stored runs and cached audio need none: ${chains(["dashscope", "mimo"])}`,
+});
+addGlobalDefs({ DashScopeKey, ProviderKey });
+
 /** Commands that always call DashScope: the key resolves during validation. */
-export const dashscopeAuth = { apiKey: keyField("dashscope") };
+export const dashscopeAuth = { apiKey: DashScopeKey };
 
 /**
  * Commands that may not need a key (stored run, cached audio, keyless listing)
  * take an optional override and resolve the default chain only when a provider
  * is actually called — a stored replay stays offline and never waits on the vault.
  */
-export const lazyAuth = (scope: string, keys: readonly Provider[] = ["dashscope"]) => ({
-  apiKey: v.optionalAsync(
-    secret(key, resolvers, {
-      description: `${scope}. Omitted → read only when a provider is called: ${keys
-        .map((name) => `${name} ${providers[name].default.join(" → ")}`)
-        .join("; ")}`,
-    }),
-  ),
-});
+export const lazyAuth = { apiKey: v.optionalAsync(ProviderKey) };
 
 export type KeyProbe = { available: true; value: string } | { available: false; tried: string };
 

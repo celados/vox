@@ -7,10 +7,16 @@ import packageJson from "../package.json" with { type: "json" };
 
 const ENTRY = join(import.meta.dir, "main.ts");
 
-async function run(args: string[], home?: string, env: Record<string, string> = {}) {
+async function run(
+  args: string[],
+  home?: string,
+  env: Record<string, string> = {},
+  stdin?: string,
+) {
   // Provider keys come only from what a test passes; the latch resolver is off under bun test.
   const { DASHSCOPE_API_KEY: _d, MIMO_API_KEY: _m, ...inherited } = process.env;
   const proc = Bun.spawn(["bun", "run", ENTRY, ...args], {
+    stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin),
     stdout: "pipe",
     stderr: "pipe",
     env: { ...inherited, NODE_ENV: "test", HOME: home ?? process.env.HOME, ...env },
@@ -52,7 +58,13 @@ test("@schema exposes the dotted command surface", async () => {
   expect(stdout).not.toContain("dashscope(");
   expect(stdout).not.toContain("auth:");
   expect(stdout).not.toContain("values:");
-  expect(stdout).toContain("apiKey?: string | { ref: string }");
+  // Key fields are named once (addGlobalDefs), not repeated per command.
+  expect(stdout).toContain(
+    "type DashScopeKey = string | { ref: `env:${string}` | `bw://${string}/${string}` }",
+  );
+  expect(stdout).toContain("prune(input: { apiKey?: DashScopeKey;");
+  expect(stdout).toContain("list(input: { apiKey?: ProviderKey })");
+  expect(stdout).toContain("text: string | { ref: `file:${string}` }");
   expect(stdout).toContain("env:DASHSCOPE_API_KEY → bw://");
   expect(stdout).toContain("env:MIMO_API_KEY → bw://");
 });
@@ -102,7 +114,12 @@ test("an explicit env ref supplies the key; a secret is never echoed", async () 
   expect(ok.stderr).toContain("no vocabulary name given");
   expect(ok.stdout + ok.stderr).not.toContain("sk-ref-test-key");
 
-  const bad = await run(["vocab.prune", "{ apiKey: '   ' }"], home);
+  const argv = await run(["vocab.prune", "{ apiKey: 'sk-argv-literal' }"], home);
+  expect(argv.exitCode).toBe(1);
+  expect(argv.stderr).toContain("a literal secret on the command line");
+  expect(argv.stdout + argv.stderr).not.toContain("sk-argv-literal");
+
+  const bad = await run(["vocab.prune", "-"], home, {}, "apiKey: '   '\n");
   expect(bad.exitCode).toBe(1);
   expect(bad.stderr).toContain("value hidden");
 
@@ -117,6 +134,21 @@ test("say treats --text - as literal text, not a stdin read", async () => {
   // `-` is a literal value now; with no key the provider call fails, not a stdin read.
   expect(exitCode).toBe(1);
   expect(stderr).toContain("key_unavailable");
+});
+
+test("say reads text from a file reference", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vox-home-"));
+  const script = join(home, "script.txt");
+  await Bun.write(script, "第一行。\nSecond line.\n");
+  // The file resolves during validation; with no key the provider call fails next.
+  const ok = await run(["say", `{ text: { ref: 'file:${script}' } }`], home);
+  expect(ok.exitCode).toBe(1);
+  expect(ok.stderr).toContain("key_unavailable");
+
+  const missing = await run(["say", `{ text: { ref: 'file:${join(home, "nope.txt")}' } }`], home);
+  expect(missing.exitCode).toBe(1);
+  expect(missing.stderr).toContain("INVALID_INPUT");
+  expect(missing.stderr).not.toContain("key_unavailable");
 });
 
 test("session.remove rejects path traversal before touching the filesystem", async () => {

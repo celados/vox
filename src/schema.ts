@@ -1,7 +1,7 @@
 import type { InferHandlers } from "@celados/argc";
 
 import { c, group } from "@celados/argc";
-import { toStandardJsonSchema } from "@celados/argc/ref";
+import { file, ref, toStandardJsonSchema } from "@celados/argc/ref";
 import * as v from "valibot";
 
 import { dashscopeAuth, lazyAuth } from "./auth.ts";
@@ -30,10 +30,7 @@ const hear = c
   .input(
     s(
       v.objectAsync({
-        ...lazyAuth("Key for the chosen model (DashScope for fun/qwen, MiMo for mimo)", [
-          "dashscope",
-          "mimo",
-        ]),
+        ...lazyAuth,
         file: v.pipe(v.string(), v.minLength(1)),
         model: hearVendor,
         vocab: v.optional(v.string()),
@@ -157,7 +154,7 @@ const vocab = group(
   {
     list: c
       .meta({ description: "List local vocabularies, sync state, and remote quota" })
-      .input(s(v.objectAsync({ ...lazyAuth("DashScope key for the remote quota") }))),
+      .input(s(v.objectAsync({ ...lazyAuth }))),
     sync: c
       .meta({
         description:
@@ -187,17 +184,21 @@ const vocab = group(
 
 const say = c
   .meta({
-    description: "Speak text with TTS. Multi-line text: whole input as YAML with text: |",
+    description:
+      "Speak text with TTS. Multi-line text: whole input as YAML with text: |, or a file with text: { ref: 'file:…' }",
     examples: [
       "vox say --text 'Hello world' --voice Cherry",
       "vox say - <<'EOF'\nvoice: Cherry\ntext: |\n  First line.\n  Slow and clear.\nEOF",
+      "vox say \"{ text: { ref: 'file:script.txt' }, voice: 'Cherry' }\"",
     ],
   })
   .input(
     s(
       v.objectAsync({
-        ...lazyAuth("DashScope key; cached audio needs none"),
-        text: v.pipe(v.string(), v.minLength(1)),
+        ...lazyAuth,
+        text: ref(v.pipe(v.string(), v.minLength(1)), [file()], {
+          description: "Text to speak, or a text file read verbatim",
+        }),
         voice: v.optional(v.string()),
         lang: v.optional(v.string(), "auto"),
         instruct: v.optional(v.string()),
@@ -214,7 +215,7 @@ const voice = group(
   {
     list: c
       .meta({ description: "List system and cloned voices" })
-      .input(s(v.objectAsync({ ...lazyAuth("DashScope key for cloned voices") }))),
+      .input(s(v.objectAsync({ ...lazyAuth }))),
     record: c
       .meta({
         description: "Enroll a cloned voice from a file, or record from the mic on a TTY",

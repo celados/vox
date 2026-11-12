@@ -164,11 +164,15 @@ text: |
   First line.
   Slow and clear.
 EOF
+vox say "{ text: { ref: 'file:script.txt' }, voice: 'Cherry' }"
 vox say --text 'Save this' --output ~/Desktop/out.wav
 vox voice.list
 vox voice.record --file ~/sample.wav --name myvoice
 vox voice.remove --voiceId <id>
 ```
+
+A script already on disk is `text: { ref: 'file:<path>' }` (read verbatim,
+relative to the working directory, `~/` is home) — don't paste it back.
 
 System voices: Cherry, Ethan, Chelsie, Serena (zh/en), Dylan (Beijing), Jada
 (Shanghai), Sunny (Sichuan). `--output` writes a WAV and does not play.
@@ -198,6 +202,7 @@ person rather than hunting for the key yourself. `session_not_found` → `vox se
 | Treat the envelope as a subtitle file   | `export --format srt` or `txt`        | Index and content never share stdout           |
 | Invent a create/edit vocab command      | Write `~/.vox/vocabulary/<name>.yaml` | The YAML is the source of truth                |
 | Put multi-line TTS in a JSON object     | `vox say - <<'EOF'` with `text: \|`   | Escaping burns tokens and breaks               |
+| Paste a script file into `text`         | `text: { ref: 'file:script.txt' }`    | Read as is; no copy in the transcript          |
 | Paste a key literal into `apiKey`       | `apiKey: { ref: 'env:NAME' }`         | Literals land in shell history and transcripts |
 
 ## Feedback
