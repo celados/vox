@@ -41,3 +41,19 @@ keys are `secret()` `apiKey` fields from `src/auth.ts` (`@celados/argc/ref`;
 default chain env, then latch `celados-agent` via `@celados/argc-latch`); tests
 pass env vars or `{ ref: 'env:…' }` and never call latch. Live DashScope calls are not mocked — run `vox hear` / `vox say` by hand
 against a real key.
+
+## Local install after every change
+
+On the user's machines `vox` is the release bundle in `~/.local/bin`,
+installed by the workspace `update-local-tool` skill. A change is not done when
+it merges or releases. It is done when the user's local `vox` runs it. The
+user does not watch for this, so do it without being asked:
+
+1. After the release workflow for your change succeeds, check whether the tool is
+   installed: `command -v vox`. If it is not, stop here.
+2. Run `bash ~/workspace/.agents/skills/update-local-tool/update.sh vox`. It prints `before -> after`.
+3. Check your change with the installed binary, for example `vox @schema` or the
+   command you changed.
+4. Put the `before -> after` line in your final report.
+
+If the release failed, report that. Don't install a local build in its place.
