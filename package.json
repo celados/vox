@@ -1,6 +1,6 @@
 {
   "name": "vox",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Agent-facing speech to text and text to speech over Alibaba Model Studio.",
   "repository": "https://github.com/celados/vox",
   "bin": {
