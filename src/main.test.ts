@@ -8,7 +8,7 @@ import packageJson from "../package.json" with { type: "json" };
 const ENTRY = join(import.meta.dir, "main.ts");
 
 async function run(args: string[], home?: string, env: Record<string, string> = {}) {
-  // Provider keys come only from what a test passes; the latch source is off under bun test.
+  // Provider keys come only from what a test passes; the latch resolver is off under bun test.
   const { DASHSCOPE_API_KEY: _d, MIMO_API_KEY: _m, ...inherited } = process.env;
   const proc = Bun.spawn(["bun", "run", ENTRY, ...args], {
     stdout: "pipe",
@@ -51,9 +51,10 @@ test("@schema exposes the dotted command surface", async () => {
   }
   expect(stdout).not.toContain("dashscope(");
   expect(stdout).not.toContain("auth:");
-  expect(stdout).toContain("values:");
-  expect(stdout).toContain("DASHSCOPE_API_KEY");
-  expect(stdout).toContain("MIMO_API_KEY");
+  expect(stdout).not.toContain("values:");
+  expect(stdout).toContain("apiKey?: string | { ref: string }");
+  expect(stdout).toContain("env:DASHSCOPE_API_KEY → bw://");
+  expect(stdout).toContain("env:MIMO_API_KEY → bw://");
 });
 
 test("@skill prints the embedded guide", async () => {
@@ -81,13 +82,41 @@ test("schema exposes MiMo as an ASR provider", async () => {
   expect(stdout).toContain('model?: "fun" | "qwen" | "mimo"');
 });
 
-test("a command needing a missing key fails with value_unavailable", async () => {
+test("a command needing a missing key fails validation naming each reference", async () => {
   const home = await mkdtemp(join(tmpdir(), "vox-home-"));
   const { stderr, exitCode } = await run(["vocab.prune", "--dryRun"], home);
   expect(exitCode).toBe(1);
-  expect(stderr).toContain("error: DOMAIN_ERROR");
-  expect(stderr).toContain("code: value_unavailable");
-  expect(stderr).toContain("DASHSCOPE_API_KEY");
+  expect(stderr).toContain("INVALID_INPUT");
+  expect(stderr).toContain("env:DASHSCOPE_API_KEY (not set)");
+  expect(stderr).toContain("disabled_in_test");
+});
+
+test("an explicit env ref supplies the key; a secret is never echoed", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vox-home-"));
+  // Validation resolves the ref; the handler then stops before any network call.
+  const ok = await run(["vocab.sync", "{ apiKey: { ref: 'env:VOX_TEST_KEY' } }"], home, {
+    VOX_TEST_KEY: "sk-ref-test-key",
+  });
+  expect(ok.exitCode).toBe(1);
+  expect(ok.stderr).toContain("code: invalid_usage");
+  expect(ok.stderr).toContain("no vocabulary name given");
+  expect(ok.stdout + ok.stderr).not.toContain("sk-ref-test-key");
+
+  const bad = await run(["vocab.prune", "{ apiKey: '   ' }"], home);
+  expect(bad.exitCode).toBe(1);
+  expect(bad.stderr).toContain("value hidden");
+
+  const foreign = await run(["vocab.prune", "{ apiKey: { ref: 'file:/etc/passwd' } }"], home);
+  expect(foreign.exitCode).toBe(1);
+  expect(foreign.stderr).toContain("not a reference this field accepts");
+});
+
+test("say treats --text - as literal text, not a stdin read", async () => {
+  const home = await mkdtemp(join(tmpdir(), "vox-home-"));
+  const { stderr, exitCode } = await run(["say", "--text", "-"], home);
+  // `-` is a literal value now; with no key the provider call fails, not a stdin read.
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain("key_unavailable");
 });
 
 test("session.remove rejects path traversal before touching the filesystem", async () => {

@@ -20,12 +20,14 @@ vox @schema
 vox status
 ```
 
-Provider keys need no setup. Each is read when a command first calls that
-provider: the env var (`DASHSCOPE_API_KEY`, `MIMO_API_KEY`) if set, else the
-celados-agent vault through latch. `@schema` frontmatter lists them under
-`values:`. `vox status` resolves both and shows, per provider, `available` or
-the sources it `tried` — never key material. Stored runs, `export`, `session.*`,
-`speaker.*` and cached `say` need no key.
+Provider keys need no setup. Commands that call a provider take an optional
+`apiKey` field; omitted, the default chain runs: the env var
+(`DASHSCOPE_API_KEY`, `MIMO_API_KEY`) if set, else the celados-agent vault
+through latch. To use another key, pass a reference, never paste the key:
+`apiKey: { ref: 'env:MY_KEY' }` or `{ ref: 'bw://<item-id>/<field>' }`.
+`vox status` resolves both chains and shows, per provider, `available` or what
+it `tried` — never key material. Stored runs, `export`, `session.*`,
+`speaker.*` and cached `say` read no key.
 
 ## Speech to text
 
@@ -156,9 +158,12 @@ Weight is 1–5; 50 is a super hotword that only `qwen` honours.
 
 ```bash
 vox say --text 'Hello world' --voice Cherry
-vox say --text - <<'TXT'
-Slow and clear.
-TXT
+vox say - <<'EOF'
+voice: Cherry
+text: |
+  First line.
+  Slow and clear.
+EOF
 vox say --text 'Save this' --output ~/Desktop/out.wav
 vox voice.list
 vox voice.record --file ~/sample.wav --name myvoice
@@ -173,14 +178,16 @@ System voices: Cherry, Ethan, Chelsie, Serena (zh/en), Dylan (Beijing), Jada
 Domain refusals carry `error: DOMAIN_ERROR` and a matchable `code`. Every
 failure exits 1 — branch on `code`, not the process status or the detail prose:
 
-`value_unavailable` · `audio_too_large` · `audio_unsupported` ·
+`key_unavailable` · `audio_too_large` · `audio_unsupported` ·
 `vocab_not_found` · `vocab_quota_exceeded` · `vocab_model_mismatch` ·
 `vocab_index_corrupt` · `session_not_found` · `session_ambiguous` ·
 `invalid_usage` · `io_error` · `api_error` · `speaker_not_found` ·
 `speaker_labels_missing` · `speaker_runtime_unavailable`
 
-`value_unavailable` names the key and every source tried; report it to a person
-rather than hunting for the key yourself. `session_not_found` → `vox session.list`.
+A key the chain cannot find fails as `INVALID_INPUT` on `apiKey` (commands that
+always call the provider) or `key_unavailable` (commands that read the key only
+when a provider is called); both name every reference tried. Report it to a
+person rather than hunting for the key yourself. `session_not_found` → `vox session.list`.
 
 ## Anti-patterns
 
@@ -190,7 +197,8 @@ rather than hunting for the key yourself. `session_not_found` → `vox session.l
 | Re-read `hear` output for the full hour | `vox export --sid <sid> --format md`  | The envelope folds on purpose                  |
 | Treat the envelope as a subtitle file   | `export --format srt` or `txt`        | Index and content never share stdout           |
 | Invent a create/edit vocab command      | Write `~/.vox/vocabulary/<name>.yaml` | The YAML is the source of truth                |
-| Put multi-line TTS in a JSON object     | `vox say --text - <<'TXT'`            | Escaping burns tokens and breaks               |
+| Put multi-line TTS in a JSON object     | `vox say - <<'EOF'` with `text: \|`   | Escaping burns tokens and breaks               |
+| Paste a key literal into `apiKey`       | `apiKey: { ref: 'env:NAME' }`         | Literals land in shell history and transcripts |
 
 ## Feedback
 

@@ -1,6 +1,6 @@
 {
   "name": "vox",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Agent-facing speech to text and text to speech over Alibaba Model Studio.",
   "repository": "https://github.com/celados/vox",
   "bin": {
@@ -18,10 +18,10 @@
     "build": "bun build src/main.ts --outfile=dist/vox --target=bun --minify && chmod +x dist/vox"
   },
   "dependencies": {
-    "@celados/argc": "^9.0.0",
-    "@celados/latch-source": "^0.1.0",
-    "@valibot/to-json-schema": "^1.7.1",
-    "valibot": "^1.4.2",
+    "@celados/argc": "^10.0.0",
+    "@celados/argc-latch": "^1.0.0",
+    "@valibot/to-json-schema": "^1.8.0",
+    "valibot": "^1.5.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {

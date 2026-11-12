@@ -1,5 +1,6 @@
 import { extname, resolve } from "node:path";
 
+import { requireKey } from "./auth.ts";
 import { durationSeconds, isSupportedFormat, supportedFormats } from "./audio.ts";
 import { VoxError, voxError } from "./cli-error.ts";
 import { type AppConfig } from "./config.ts";
@@ -12,7 +13,6 @@ import {
 } from "./dashscope.ts";
 import { MimoClient, MODEL_MIMO_ASR, mimoAudioData, mimoLanguage } from "./mimo.ts";
 import { expandHome, tilde } from "./paths.ts";
-import { secret } from "./values.ts";
 import {
   digestOf,
   loadRun,
@@ -32,6 +32,7 @@ export const FOLD_TOKENS = 2000;
 export const PREVIEW_RUNES = 60;
 
 export type HearInput = {
+  apiKey?: string;
   file: string;
   model?: string;
   vocab?: string;
@@ -114,7 +115,7 @@ export async function transcribeRun(app: AppConfig, input: HearInput): Promise<R
   }
 
   // Stored runs replay offline; only a real recognition needs the provider key.
-  const apiKey = await (vendor === "mimo" ? secret.MIMO_API_KEY : secret.DASHSCOPE_API_KEY);
+  const apiKey = await requireKey(vendor === "mimo" ? "mimo" : "dashscope", input.apiKey);
   const client = vendor === "mimo" ? undefined : new DashScopeClient(apiKey);
   let vocabularyId = "";
   if (loadedVocab && args.vocab) {

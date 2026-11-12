@@ -1,8 +1,10 @@
 import type { InferHandlers } from "@celados/argc";
 
-import { toStandardJsonSchema } from "@valibot/to-json-schema";
 import { c, group } from "@celados/argc";
+import { toStandardJsonSchema } from "@celados/argc/ref";
 import * as v from "valibot";
+
+import { dashscopeAuth, lazyAuth } from "./auth.ts";
 
 const s = toStandardJsonSchema;
 const hearVendor = v.optional(v.picklist(["fun", "qwen", "mimo"]), "fun");
@@ -27,7 +29,11 @@ const hear = c
   })
   .input(
     s(
-      v.object({
+      v.objectAsync({
+        ...lazyAuth("Key for the chosen model (DashScope for fun/qwen, MiMo for mimo)", [
+          "dashscope",
+          "mimo",
+        ]),
         file: v.pipe(v.string(), v.minLength(1)),
         model: hearVendor,
         vocab: v.optional(v.string()),
@@ -151,7 +157,7 @@ const vocab = group(
   {
     list: c
       .meta({ description: "List local vocabularies, sync state, and remote quota" })
-      .input(s(v.object({}))),
+      .input(s(v.objectAsync({ ...lazyAuth("DashScope key for the remote quota") }))),
     sync: c
       .meta({
         description:
@@ -160,7 +166,8 @@ const vocab = group(
       })
       .input(
         s(
-          v.object({
+          v.objectAsync({
+            ...dashscopeAuth,
             name: v.optional(v.string()),
             all: v.optional(v.boolean(), false),
             model: dashscopeVendor,
@@ -174,21 +181,22 @@ const vocab = group(
         description: "Delete server-side lists no local YAML claims",
         examples: ["vox vocab.prune --dryRun"],
       })
-      .input(s(v.object({ dryRun: v.optional(v.boolean(), false) }))),
+      .input(s(v.objectAsync({ ...dashscopeAuth, dryRun: v.optional(v.boolean(), false) }))),
   },
 );
 
 const say = c
   .meta({
-    description: "Speak text with TTS. Prefer --text - for multi-line input",
+    description: "Speak text with TTS. Multi-line text: whole input as YAML with text: |",
     examples: [
       "vox say --text 'Hello world' --voice Cherry",
-      "vox say --text - <<'TXT'\nSlow and clear.\nTXT",
+      "vox say - <<'EOF'\nvoice: Cherry\ntext: |\n  First line.\n  Slow and clear.\nEOF",
     ],
   })
   .input(
     s(
-      v.object({
+      v.objectAsync({
+        ...lazyAuth("DashScope key; cached audio needs none"),
         text: v.pipe(v.string(), v.minLength(1)),
         voice: v.optional(v.string()),
         lang: v.optional(v.string(), "auto"),
@@ -204,7 +212,9 @@ const say = c
 const voice = group(
   { description: "List system voices and manage cloned voices" },
   {
-    list: c.meta({ description: "List system and cloned voices" }).input(s(v.object({}))),
+    list: c
+      .meta({ description: "List system and cloned voices" })
+      .input(s(v.objectAsync({ ...lazyAuth("DashScope key for cloned voices") }))),
     record: c
       .meta({
         description: "Enroll a cloned voice from a file, or record from the mic on a TTY",
@@ -212,7 +222,8 @@ const voice = group(
       })
       .input(
         s(
-          v.object({
+          v.objectAsync({
+            ...dashscopeAuth,
             name: v.optional(v.string()),
             file: v.optional(v.string()),
             lang: v.optional(v.string()),
@@ -222,7 +233,7 @@ const voice = group(
       ),
     remove: c
       .meta({ description: "Delete a cloned voice by id" })
-      .input(s(v.object({ voiceId: v.pipe(v.string(), v.minLength(1)) })))
+      .input(s(v.objectAsync({ ...dashscopeAuth, voiceId: v.pipe(v.string(), v.minLength(1)) })))
       .positional("voiceId"),
   },
 );

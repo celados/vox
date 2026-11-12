@@ -10,6 +10,7 @@ import {
   wrapPcmAsWav,
   writeWav,
 } from "./audio.ts";
+import { probeKey, requireKey } from "./auth.ts";
 import { voxError } from "./cli-error.ts";
 import { saveState, type AppConfig } from "./config.ts";
 import {
@@ -20,10 +21,9 @@ import {
   SYSTEM_VOICES,
 } from "./dashscope.ts";
 import { streamTts } from "./realtime.ts";
-import { resolveTextField } from "./text-body.ts";
-import { isValueUnavailable, secret } from "./values.ts";
 
 export type SayInput = {
+  apiKey?: string;
   text: string;
   voice?: string;
   lang?: string;
@@ -34,8 +34,8 @@ export type SayInput = {
 };
 
 export async function say(app: AppConfig, input: SayInput): Promise<unknown> {
-  const text = await resolveTextField(input.text);
-  if (!text?.trim()) throw voxError("invalid_usage", "say requires text");
+  const text = input.text;
+  if (!text.trim()) throw voxError("invalid_usage", "say requires text");
 
   let voice = input.voice || app.state.last_voice || "Cherry";
   let model = modelForVoice(voice);
@@ -64,7 +64,7 @@ export async function say(app: AppConfig, input: SayInput): Promise<unknown> {
     const chunks: Uint8Array[] = [];
     const t0 = Date.now();
     let first = false;
-    const apiKey = await secret.DASHSCOPE_API_KEY;
+    const apiKey = await requireKey("dashscope", input.apiKey);
     try {
       await streamTts(
         apiKey,
@@ -109,15 +109,27 @@ export async function say(app: AppConfig, input: SayInput): Promise<unknown> {
   return out;
 }
 
-export async function listVoices(app: AppConfig): Promise<unknown> {
+export async function listVoices(app: AppConfig, given: string | undefined): Promise<unknown> {
   const system = SYSTEM_VOICES.map((voice) => ({
     id: voice.id,
     gender: voice.gender,
     language: voice.language,
   }));
+  let apiKey = given;
+  if (apiKey === undefined) {
+    const probe = await probeKey("dashscope");
+    if (!probe.available) {
+      return {
+        system,
+        cloned: [],
+        $hints: ["DashScope API key unavailable — vox status shows why"],
+      };
+    }
+    apiKey = probe.value;
+  }
   let cloned: Array<{ name: string; id: string; language?: string; model?: string }> = [];
   try {
-    const voices = await new DashScopeClient(await secret.DASHSCOPE_API_KEY).listVoices(0, 50);
+    const voices = await new DashScopeClient(apiKey).listVoices(0, 50);
     cloned = voices.map((voice) => ({
       name: extractNameFromVoiceId(voice.voice),
       id: voice.voice,
@@ -125,13 +137,6 @@ export async function listVoices(app: AppConfig): Promise<unknown> {
       model: voice.target_model,
     }));
   } catch (error) {
-    if (isValueUnavailable(error)) {
-      return {
-        system,
-        cloned: [],
-        $hints: ["DASHSCOPE_API_KEY unavailable — vox status shows why"],
-      };
-    }
     console.error(
       `failed to fetch cloned voices: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -146,6 +151,7 @@ const SAMPLE_TEXTS: Record<string, string> = {
 };
 
 export type VoiceRecordInput = {
+  apiKey: string;
   name?: string;
   file?: string;
   lang?: string;
@@ -153,7 +159,6 @@ export type VoiceRecordInput = {
 };
 
 export async function recordVoice(app: AppConfig, input: VoiceRecordInput): Promise<unknown> {
-  const apiKey = await secret.DASHSCOPE_API_KEY;
   const lang = input.lang || (await detectSystemLang());
   const duration = input.duration ?? 15;
 
@@ -183,7 +188,7 @@ export async function recordVoice(app: AppConfig, input: VoiceRecordInput): Prom
   console.error(`enrolling ${name}...`);
   let voiceId: string;
   try {
-    voiceId = await new DashScopeClient(apiKey).enrollVoice(
+    voiceId = await new DashScopeClient(input.apiKey).enrollVoice(
       name,
       Buffer.from(wavData).toString("base64"),
     );
@@ -200,11 +205,14 @@ export async function recordVoice(app: AppConfig, input: VoiceRecordInput): Prom
   };
 }
 
-export async function removeVoice(app: AppConfig, voiceId: string): Promise<unknown> {
+export async function removeVoice(
+  app: AppConfig,
+  apiKey: string,
+  voiceId: string,
+): Promise<unknown> {
   if (isSystemVoice(voiceId)) {
     throw voxError("invalid_usage", `cannot delete system voice: ${voiceId}`);
   }
-  const apiKey = await secret.DASHSCOPE_API_KEY;
   try {
     await new DashScopeClient(apiKey).deleteVoice(voiceId);
   } catch (error) {

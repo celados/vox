@@ -37,6 +37,7 @@ Playback uses `afplay` (macOS) or `ffplay`/`aplay`. Microphone enrollment uses
 ## Testing
 
 `bun test` is offline: store, vocab, export, schema, keyless CLI paths. Provider
-keys come from `src/values.ts` (env, then latch `celados-agent`); tests pass env
-vars and never call latch. Live DashScope calls are not mocked — run `vox hear` / `vox say` by hand
+keys are `secret()` `apiKey` fields from `src/auth.ts` (`@celados/argc/ref`;
+default chain env, then latch `celados-agent` via `@celados/argc-latch`); tests
+pass env vars or `{ ref: 'env:…' }` and never call latch. Live DashScope calls are not mocked — run `vox hear` / `vox say` by hand
 against a real key.
