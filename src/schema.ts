@@ -21,7 +21,6 @@ const hear = c
   .meta({
     description:
       "Transcribe audio into a cached run and Markdown file, optionally identify enrolled speakers",
-    examples: ["vox hear \"{ file: 'lecture.mp3', lang: ['zh'], speakers: true }\""],
   })
   .input(
     s(
@@ -125,7 +124,6 @@ const exportCmd = c
   .meta({
     description:
       "Render a stored run as srt, vtt, md, txt, or json. stdout is the document unless output is set",
-    examples: ["vox export --sid a3f1c2 --format srt --output meeting.srt"],
   })
   .input(
     s(
@@ -148,7 +146,6 @@ const vocab = group(
       .meta({
         description:
           "Push local YAML to the server for a target model. hear --vocab syncs on demand",
-        examples: ["vox vocab.sync --all --model qwen"],
       })
       .input(
         s(
@@ -172,8 +169,7 @@ const vocab = group(
 
 const say = c
   .meta({
-    description:
-      "Speak text with TTS. Multi-line text: whole input as YAML with text: |, or a file with text: { ref: 'file:…' }",
+    description: "Speak text with TTS",
     examples: [
       "vox say - <<'EOF'\nvoice: Cherry\ntext: |\n  First line.\n  Slow and clear.\nEOF",
       "vox say \"{ text: { ref: 'file:script.txt' }, voice: 'Cherry' }\"",
@@ -186,9 +182,18 @@ const say = c
         text: ref(v.pipe(v.string(), v.minLength(1)), [file()], {
           description: "Text to speak, or a text file read verbatim",
         }),
-        voice: v.optional(v.string()),
+        voice: v.optional(
+          v.pipe(
+            v.string(),
+            v.description(
+              "System or cloned voice name; see voice.list. Omitted: the last used voice, else Cherry",
+            ),
+          ),
+        ),
         lang: v.optional(v.string(), "auto"),
-        instruct: v.optional(v.string()),
+        instruct: v.optional(
+          v.pipe(v.string(), v.description("Free-text delivery style, honored by system voices")),
+        ),
         speed: v.optional(v.number(), 1),
         output: v.optional(v.string()),
         noCache: v.optional(v.boolean(), false),
@@ -226,7 +231,7 @@ const voice = group(
 );
 
 const cache = group(
-  { description: "TTS audio cache (legacy; not content-addressed runs)" },
+  { description: "TTS audio cache (legacy; not content-addressed runs)", hidden: true },
   {
     status: c
       .meta({ description: "Show cache path, file count, and bytes" })

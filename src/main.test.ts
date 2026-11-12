@@ -51,10 +51,12 @@ test("@schema exposes the dotted command surface", async () => {
     "### say\n",
     "### voice.*\n",
     "### voice.record\n",
-    "### cache.*\n",
   ]) {
     expect(stdout).toContain(fragment);
   }
+  // Legacy cache ops are hidden from the overview but still addressable by path.
+  expect(stdout).not.toContain("### cache");
+  expect((await run(["@schema", ".cache"])).stdout).toContain("### cache.clear\n");
   expect(stdout).not.toContain("### dashscope");
   expect(stdout).not.toContain("### auth");
   expect(stdout).not.toContain("values:");

@@ -35,7 +35,7 @@ Local, Apple Silicon, needs `uv` and `ffmpeg`. Voiceprints are personal voice da
 
 A vocabulary is a YAML file you write at `~/.vox/vocabulary/<name>.yaml`; there is no create or edit command. `hear --vocab <name>` syncs on demand, and editing the file changes the run id. It only biases domain terms; it cannot rescue bad audio. File format and quota: `vox @skill references/vocab.md`.
 
-## Speaking — `.{say,voice,cache}`
+## Speaking — `.{say,voice}`
 
 - Multi-line text goes as the whole input in YAML (`vox say - <<'EOF'` with `text: |`), not inside a JSON object. A script already on disk is `text: { ref: 'file:<path>' }`; don't paste it back.
 - System voices: Cherry, Ethan, Chelsie, Serena (zh/en), Dylan (Beijing), Jada (Shanghai), Sunny (Sichuan). `--output` writes a WAV and does not play.
