@@ -75,7 +75,7 @@ test("@skill prints the embedded guide", async () => {
   const { stdout, stderr, exitCode } = await run(["@skill"]);
   expect(exitCode, stderr).toBe(0);
   expect(stdout).toContain("vox @schema");
-  expect(stdout).toContain("There is no realtime ASR");
+  expect(stdout).toContain("No realtime ASR");
 });
 
 test("status reports each provider key without key material", async () => {
