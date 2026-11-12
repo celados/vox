@@ -39,31 +39,33 @@ test("@schema exposes the dotted command surface", async () => {
   const { stdout, stderr, exitCode } = await run(["@schema"]);
   expect(exitCode, stderr).toBe(0);
   for (const fragment of [
-    "status()",
-    "hear(input: {",
-    "session:",
-    "list(",
-    "remove(",
-    "export(input: {",
-    "vocab:",
-    "sync(",
-    "prune(",
-    "say(input: {",
-    "voice:",
-    "record(",
-    "cache:",
+    "### status\n",
+    "### hear\n",
+    "### session.*\n",
+    "### session.list\n",
+    "### session.remove\n",
+    "### export\n",
+    "### vocab.*\n",
+    "### vocab.sync\n",
+    "### vocab.prune\n",
+    "### say\n",
+    "### voice.*\n",
+    "### voice.record\n",
+    "### cache.*\n",
   ]) {
     expect(stdout).toContain(fragment);
   }
-  expect(stdout).not.toContain("dashscope(");
-  expect(stdout).not.toContain("auth:");
+  expect(stdout).not.toContain("### dashscope");
+  expect(stdout).not.toContain("### auth");
   expect(stdout).not.toContain("values:");
   // Key fields are named once (addGlobalDefs), not repeated per command.
   expect(stdout).toContain(
     "type DashScopeKey = string | { ref: `env:${string}` | `bw://${string}/${string}` }",
   );
-  expect(stdout).toContain("prune(input: { apiKey?: DashScopeKey;");
-  expect(stdout).toContain("list(input: { apiKey?: ProviderKey })");
+  expect(stdout).toContain("{ apiKey?: DashScopeKey; dryRun?: boolean = false }");
+  expect(stdout).toContain(
+    "### vocab.list\nList local vocabularies, sync state, and remote quota\n{ apiKey?: ProviderKey }",
+  );
   expect(stdout).toContain("text: string | { ref: `file:${string}` }");
   expect(stdout).toContain("env:DASHSCOPE_API_KEY → bw://");
   expect(stdout).toContain("env:MIMO_API_KEY → bw://");
@@ -163,7 +165,8 @@ test("speaker command schemas preserve enrollment, matching settings, and identi
   const home = await mkdtemp(join(tmpdir(), "vox-speaker-cli-"));
   const schema = await run(["@schema", ".speaker"], home);
   expect(schema.exitCode, schema.stderr).toBe(0);
-  expect(schema.stdout).toContain("enroll(input: { id: string; name: string; file: string;");
+  expect(schema.stdout).toContain("### speaker.enroll\n");
+  expect(schema.stdout).toMatch(/\n  id: string\n  name: string\n  file: string\n/);
   expect(schema.stdout).toContain("threshold?: number");
   const config = await run(["speaker.config", "{ threshold: 0.72, margin: 0.12 }"], home);
   expect(config.exitCode, config.stderr).toBe(0);

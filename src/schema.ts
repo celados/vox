@@ -14,7 +14,6 @@ const status = c
   .meta({
     description:
       "Preflight: whether each provider key resolves (env, then vault), with sources tried. Never prints key material",
-    examples: ["vox status"],
   })
   .input(s(v.object({})));
 
@@ -22,10 +21,7 @@ const hear = c
   .meta({
     description:
       "Transcribe audio into a cached run and Markdown file, optionally identify enrolled speakers",
-    examples: [
-      "vox hear --file meeting.m4a",
-      "vox hear \"{ file: 'lecture.mp3', lang: ['zh'], speakers: true }\"",
-    ],
+    examples: ["vox hear \"{ file: 'lecture.mp3', lang: ['zh'], speakers: true }\""],
   })
   .input(
     s(
@@ -54,7 +50,6 @@ const speaker = group(
     enroll: c
       .meta({
         description: "Enroll a named speaker from 3–30 seconds of clean solo audio",
-        examples: ["vox speaker.enroll \"{ id: 'ethan', name: 'Ethan', file: 'ethan.wav' }\""],
       })
       .input(
         s(
@@ -81,7 +76,6 @@ const speaker = group(
     identify: c
       .meta({
         description: "Identify speakers in a stored run without uploading or repeating ASR",
-        examples: ["vox speaker.identify \"{ sid: 'a3f1c2', output: 'meeting.transcript.md' }\""],
       })
       .input(
         s(
@@ -102,7 +96,6 @@ const session = group(
     list: c
       .meta({
         description: "List run envelopes, newest first. No transcript — use export for content",
-        examples: ["vox session.list", "vox session.list --file meeting.m4a"],
       })
       .input(
         s(
@@ -115,7 +108,6 @@ const session = group(
     remove: c
       .meta({
         description: "Delete one run by unique sid prefix, or every run with all",
-        examples: ["vox session.remove --sid a3f1c2", "vox session.remove --all"],
       })
       .input(
         s(
@@ -133,10 +125,7 @@ const exportCmd = c
   .meta({
     description:
       "Render a stored run as srt, vtt, md, txt, or json. stdout is the document unless output is set",
-    examples: [
-      "vox export --sid a3f1c2 --format md",
-      "vox export --sid a3f1c2 --format srt --output meeting.srt",
-    ],
+    examples: ["vox export --sid a3f1c2 --format srt --output meeting.srt"],
   })
   .input(
     s(
@@ -159,7 +148,7 @@ const vocab = group(
       .meta({
         description:
           "Push local YAML to the server for a target model. hear --vocab syncs on demand",
-        examples: ["vox vocab.sync --name meeting", "vox vocab.sync --all --model qwen"],
+        examples: ["vox vocab.sync --all --model qwen"],
       })
       .input(
         s(
@@ -176,7 +165,6 @@ const vocab = group(
     prune: c
       .meta({
         description: "Delete server-side lists no local YAML claims",
-        examples: ["vox vocab.prune --dryRun"],
       })
       .input(s(v.objectAsync({ ...dashscopeAuth, dryRun: v.optional(v.boolean(), false) }))),
   },
@@ -187,7 +175,6 @@ const say = c
     description:
       "Speak text with TTS. Multi-line text: whole input as YAML with text: |, or a file with text: { ref: 'file:…' }",
     examples: [
-      "vox say --text 'Hello world' --voice Cherry",
       "vox say - <<'EOF'\nvoice: Cherry\ntext: |\n  First line.\n  Slow and clear.\nEOF",
       "vox say \"{ text: { ref: 'file:script.txt' }, voice: 'Cherry' }\"",
     ],
@@ -219,7 +206,6 @@ const voice = group(
     record: c
       .meta({
         description: "Enroll a cloned voice from a file, or record from the mic on a TTY",
-        examples: ["vox voice.record --file sample.wav --name myvoice"],
       })
       .input(
         s(
