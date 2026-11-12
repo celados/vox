@@ -13,6 +13,7 @@ export type VoxErrorCode =
   | "session_not_found"
   | "session_ambiguous"
   | "api_error"
+  | "key_unavailable"
   | "invalid_usage"
   | "io_error";
 

@@ -1,8 +1,10 @@
 import type { InferHandlers } from "@celados/argc";
 
-import { toStandardJsonSchema } from "@valibot/to-json-schema";
 import { c, group } from "@celados/argc";
+import { file, ref, toStandardJsonSchema } from "@celados/argc/ref";
 import * as v from "valibot";
+
+import { dashscopeAuth, lazyAuth } from "./auth.ts";
 
 const s = toStandardJsonSchema;
 const hearVendor = v.optional(v.picklist(["fun", "qwen", "mimo"]), "fun");
@@ -27,7 +29,8 @@ const hear = c
   })
   .input(
     s(
-      v.object({
+      v.objectAsync({
+        ...lazyAuth,
         file: v.pipe(v.string(), v.minLength(1)),
         model: hearVendor,
         vocab: v.optional(v.string()),
@@ -151,7 +154,7 @@ const vocab = group(
   {
     list: c
       .meta({ description: "List local vocabularies, sync state, and remote quota" })
-      .input(s(v.object({}))),
+      .input(s(v.objectAsync({ ...lazyAuth }))),
     sync: c
       .meta({
         description:
@@ -160,7 +163,8 @@ const vocab = group(
       })
       .input(
         s(
-          v.object({
+          v.objectAsync({
+            ...dashscopeAuth,
             name: v.optional(v.string()),
             all: v.optional(v.boolean(), false),
             model: dashscopeVendor,
@@ -174,22 +178,27 @@ const vocab = group(
         description: "Delete server-side lists no local YAML claims",
         examples: ["vox vocab.prune --dryRun"],
       })
-      .input(s(v.object({ dryRun: v.optional(v.boolean(), false) }))),
+      .input(s(v.objectAsync({ ...dashscopeAuth, dryRun: v.optional(v.boolean(), false) }))),
   },
 );
 
 const say = c
   .meta({
-    description: "Speak text with TTS. Prefer --text - for multi-line input",
+    description:
+      "Speak text with TTS. Multi-line text: whole input as YAML with text: |, or a file with text: { ref: 'file:…' }",
     examples: [
       "vox say --text 'Hello world' --voice Cherry",
-      "vox say --text - <<'TXT'\nSlow and clear.\nTXT",
+      "vox say - <<'EOF'\nvoice: Cherry\ntext: |\n  First line.\n  Slow and clear.\nEOF",
+      "vox say \"{ text: { ref: 'file:script.txt' }, voice: 'Cherry' }\"",
     ],
   })
   .input(
     s(
-      v.object({
-        text: v.pipe(v.string(), v.minLength(1)),
+      v.objectAsync({
+        ...lazyAuth,
+        text: ref(v.pipe(v.string(), v.minLength(1)), [file()], {
+          description: "Text to speak, or a text file read verbatim",
+        }),
         voice: v.optional(v.string()),
         lang: v.optional(v.string(), "auto"),
         instruct: v.optional(v.string()),
@@ -204,7 +213,9 @@ const say = c
 const voice = group(
   { description: "List system voices and manage cloned voices" },
   {
-    list: c.meta({ description: "List system and cloned voices" }).input(s(v.object({}))),
+    list: c
+      .meta({ description: "List system and cloned voices" })
+      .input(s(v.objectAsync({ ...lazyAuth }))),
     record: c
       .meta({
         description: "Enroll a cloned voice from a file, or record from the mic on a TTY",
@@ -212,7 +223,8 @@ const voice = group(
       })
       .input(
         s(
-          v.object({
+          v.objectAsync({
+            ...dashscopeAuth,
             name: v.optional(v.string()),
             file: v.optional(v.string()),
             lang: v.optional(v.string()),
@@ -222,7 +234,7 @@ const voice = group(
       ),
     remove: c
       .meta({ description: "Delete a cloned voice by id" })
-      .input(s(v.object({ voiceId: v.pipe(v.string(), v.minLength(1)) })))
+      .input(s(v.objectAsync({ ...dashscopeAuth, voiceId: v.pipe(v.string(), v.minLength(1)) })))
       .positional("voiceId"),
   },
 );

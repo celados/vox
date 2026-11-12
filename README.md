@@ -132,6 +132,7 @@ The account cap is 10 lists shared across all models.
 ```bash
 vox say --text '你好世界' --voice Cherry --speed 1.2
 vox say --text 'Save this' --output out.wav
+vox say "{ text: { ref: 'file:script.txt' } }"   # read the text from a file
 vox voice.list
 vox voice.record --file sample.wav --name myvoice
 vox cache.status

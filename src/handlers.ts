@@ -1,7 +1,8 @@
 import { writeFile } from "node:fs/promises";
 
+import { probeKey, providers } from "./auth.ts";
 import { voxError } from "./cli-error.ts";
-import { loadConfig, type AppConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import { DashScopeClient, resolveModel, VOCABULARY_QUOTA } from "./dashscope.ts";
 import { render } from "./export.ts";
 import { hear } from "./hear.ts";
@@ -15,7 +16,6 @@ import {
 } from "./speakers.ts";
 import { listRuns, loadRun, newStore, removeAllRuns, removeRun, resolveSid } from "./run-store.ts";
 import type { AppHandlers } from "./schema.ts";
-import { isValueUnavailable, secret } from "./values.ts";
 import { cacheClear, cacheStatus, listVoices, recordVoice, removeVoice, say } from "./tts.ts";
 import {
   describeIndex,
@@ -51,18 +51,18 @@ export const handlers: AppHandlers = {
   },
   export: async (options) => await exportRun(options.input),
   vocab: {
-    list: async () => await vocabList(),
+    list: async (options) => await vocabList(options.input.apiKey),
     sync: async (options) => await vocabSync(options.input),
-    prune: async (options) => await vocabPrune(options.input.dryRun ?? false),
+    prune: async (options) => await vocabPrune(options.input.apiKey, options.input.dryRun ?? false),
   },
   say: async (options) => {
     const app = await loadConfig();
     return await say(app, options.input);
   },
   voice: {
-    list: async () => {
+    list: async (options) => {
       const app = await loadConfig();
-      return await listVoices(app);
+      return await listVoices(app, options.input.apiKey);
     },
     record: async (options) => {
       const app = await loadConfig();
@@ -70,7 +70,7 @@ export const handlers: AppHandlers = {
     },
     remove: async (options) => {
       const app = await loadConfig();
-      return await removeVoice(app, options.input.voiceId);
+      return await removeVoice(app, options.input.apiKey, options.input.voiceId);
     },
   },
   cache: {
@@ -86,16 +86,13 @@ export const handlers: AppHandlers = {
 };
 
 async function providerStatus(): Promise<Record<string, unknown>> {
-  const providers = { dashscope: "DASHSCOPE_API_KEY", mimo: "MIMO_API_KEY" } as const;
   const entries = await Promise.all(
-    Object.entries(providers).map(async ([provider, value]) => {
-      try {
-        await secret[value];
-        return [provider, { available: true }] as const;
-      } catch (error) {
-        if (!isValueUnavailable(error)) throw error;
-        return [provider, { available: false, tried: error.envelope.tried }] as const;
-      }
+    (Object.keys(providers) as Array<keyof typeof providers>).map(async (provider) => {
+      const probe = await probeKey(provider);
+      return [
+        provider,
+        probe.available ? { available: true } : { available: false, tried: probe.tried },
+      ] as const;
     }),
   );
   return Object.fromEntries(entries);
@@ -162,7 +159,7 @@ async function exportRun(input: {
   return rendered;
 }
 
-async function vocabList(): Promise<unknown> {
+async function vocabList(apiKey: string | undefined): Promise<unknown> {
   const app = await loadConfig();
   const names = await vocabNames(app.dir);
   const index = await loadIndex(app.dir);
@@ -180,27 +177,32 @@ async function vocabList(): Promise<unknown> {
     }
     vocabularies.push(entry);
   }
-  return { quota: await quotaUsage(app), vocabularies };
+  return { quota: await quotaUsage(apiKey), vocabularies };
 }
 
-async function quotaUsage(app: AppConfig): Promise<string> {
+async function quotaUsage(given: string | undefined): Promise<string> {
+  let apiKey = given;
+  if (apiKey === undefined) {
+    const probe = await probeKey("dashscope");
+    if (!probe.available) return "unknown (DashScope API key unavailable — vox status shows why)";
+    apiKey = probe.value;
+  }
   try {
-    const remote = await new DashScopeClient(await secret.DASHSCOPE_API_KEY).listVocabularies();
+    const remote = await new DashScopeClient(apiKey).listVocabularies();
     return `${remote.length}/${VOCABULARY_QUOTA}`;
   } catch (error) {
-    if (isValueUnavailable(error)) return "unknown (DASHSCOPE_API_KEY unavailable)";
     return `unknown (${error instanceof Error ? error.message : String(error)})`;
   }
 }
 
 async function vocabSync(input: {
+  apiKey: string;
   name?: string;
   all?: boolean;
   model?: string;
   force?: boolean;
 }): Promise<unknown> {
   const app = await loadConfig();
-  const apiKey = await secret.DASHSCOPE_API_KEY;
   const vendor = input.model ?? "fun";
   const model = resolveModel(vendor);
   if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
@@ -215,7 +217,7 @@ async function vocabSync(input: {
     );
   }
 
-  const client = new DashScopeClient(apiKey);
+  const client = new DashScopeClient(input.apiKey);
   const targets = input.all
     ? await listVocabularies(app.dir)
     : [await loadVocabulary(app.dir, input.name!)];
@@ -233,9 +235,8 @@ async function vocabSync(input: {
   return { items };
 }
 
-async function vocabPrune(dryRun: boolean): Promise<unknown> {
+async function vocabPrune(apiKey: string, dryRun: boolean): Promise<unknown> {
   const app = await loadConfig();
-  const apiKey = await secret.DASHSCOPE_API_KEY;
   const orphans = await pruneVocabularies(new DashScopeClient(apiKey), app.dir, dryRun);
   return { orphans, dryRun };
 }
