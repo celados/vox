@@ -1,15 +1,7 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "noEmit": true,
-    "noUncheckedIndexedAccess": true,
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "skipLibCheck": true,
-    "types": ["bun"]
-  },
-  "include": ["src/**/*.ts"]
+	"extends": "@celados/harness/tsconfig/bun.json",
+	"compilerOptions": {
+		"noUncheckedIndexedAccess": true
+	},
+	"include": ["src/**/*.ts", "vite.config.ts"]
 }
