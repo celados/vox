@@ -1,286 +1,359 @@
-import { extname, resolve } from "node:path";
+import { extname, resolve } from 'node:path'
 
-import { requireKey } from "./auth.ts";
-import { durationSeconds, isSupportedFormat, supportedFormats } from "./audio.ts";
-import { VoxError, voxError } from "./cli-error.ts";
-import { type AppConfig } from "./config.ts";
 import {
-  DashScopeClient,
-  DIARIZATION_MAX_SECONDS,
-  MAX_FILE_BYTES,
-  MAX_FILE_SECONDS,
-  resolveModel,
-} from "./dashscope.ts";
-import { MimoClient, MODEL_MIMO_ASR, mimoAudioData, mimoLanguage } from "./mimo.ts";
-import { expandHome, tilde } from "./paths.ts";
+	durationSeconds,
+	isSupportedFormat,
+	supportedFormats,
+} from './audio.ts'
+import { requireKey } from './auth.ts'
+import { VoxError, voxError } from './cli-error.ts'
+import { type AppConfig } from './config.ts'
 import {
-  digestOf,
-  loadRun,
-  measure,
-  newStore,
-  preview,
-  runDir,
-  saveRun,
-  sidOf,
-  type Args,
-  type RunRecord,
-} from "./run-store.ts";
-import { identificationSettings, identifyResult, writeTranscript } from "./speakers.ts";
-import { contentHash, loadVocabulary, resolveWords, syncVocabulary } from "./vocab.ts";
+	DashScopeClient,
+	DIARIZATION_MAX_SECONDS,
+	MAX_FILE_BYTES,
+	MAX_FILE_SECONDS,
+	resolveModel,
+} from './dashscope.ts'
+import {
+	MimoClient,
+	MODEL_MIMO_ASR,
+	mimoAudioData,
+	mimoLanguage,
+} from './mimo.ts'
+import { expandHome, tilde } from './paths.ts'
+import {
+	digestOf,
+	loadRun,
+	measure,
+	newStore,
+	preview,
+	runDir,
+	saveRun,
+	sidOf,
+	type Args,
+	type RunRecord,
+} from './run-store.ts'
+import {
+	identificationSettings,
+	identifyResult,
+	writeTranscript,
+} from './speakers.ts'
+import {
+	contentHash,
+	loadVocabulary,
+	resolveWords,
+	syncVocabulary,
+} from './vocab.ts'
 
-export const FOLD_TOKENS = 2000;
-export const PREVIEW_RUNES = 60;
+export const FOLD_TOKENS = 2000
+export const PREVIEW_RUNES = 60
 
 export type HearInput = {
-  apiKey?: string;
-  file: string;
-  model?: string;
-  vocab?: string;
-  lang?: string[];
-  speakers?: boolean;
-  refresh?: boolean;
-  identify?: boolean;
-  speakerIds?: string[];
-  output?: string;
-};
+	apiKey?: string
+	file: string
+	model?: string
+	vocab?: string
+	lang?: string[]
+	speakers?: boolean
+	refresh?: boolean
+	identify?: boolean
+	speakerIds?: string[]
+	output?: string
+}
 
 export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
-  const identify = input.identify ?? false;
-  if (input.speakerIds && !identify)
-    throw voxError("invalid_usage", "speakerIds requires identify: true");
-  if (identify && input.model === "mimo")
-    throw voxError("invalid_usage", "MiMo has no speaker labels; use fun or qwen");
-  const settings = identify ? await identificationSettings(app.dir, input.speakerIds) : undefined;
-  const rec = await transcribeRun(app, { ...input, speakers: identify || input.speakers });
-  const audio = resolve(runDir(newStore(app.dir), rec.meta.sid), `audio.${rec.args.format}`);
-  let annotated = rec;
-  try {
-    if (settings)
-      annotated = { ...rec, result: await identifyResult(app.dir, audio, rec.result, settings) };
-  } catch (error) {
-    if (error instanceof VoxError)
-      throw error.withHint(
-        `ASR run ${rec.meta.sid} is saved. Retry with vox speaker.identify --sid ${rec.meta.sid}`,
-      );
-    throw error;
-  }
-  const files = await writeTranscript(app.dir, annotated, input.output, identify);
-  return { ...(envelope(annotated) as Record<string, unknown>), ...files };
+	const identify = input.identify ?? false
+	if (input.speakerIds && !identify)
+		throw voxError('invalid_usage', 'speakerIds requires identify: true')
+	if (identify && input.model === 'mimo')
+		throw voxError(
+			'invalid_usage',
+			'MiMo has no speaker labels; use fun or qwen',
+		)
+	const settings = identify
+		? await identificationSettings(app.dir, input.speakerIds)
+		: undefined
+	const rec = await transcribeRun(app, {
+		...input,
+		speakers: identify || input.speakers,
+	})
+	const audio = resolve(
+		runDir(newStore(app.dir), rec.meta.sid),
+		`audio.${rec.args.format}`,
+	)
+	let annotated = rec
+	try {
+		if (settings)
+			annotated = {
+				...rec,
+				result: await identifyResult(app.dir, audio, rec.result, settings),
+			}
+	} catch (error) {
+		if (error instanceof VoxError)
+			throw error.withHint(
+				`ASR run ${rec.meta.sid} is saved. Retry with vox speaker.identify --sid ${rec.meta.sid}`,
+			)
+		throw error
+	}
+	const files = await writeTranscript(
+		app.dir,
+		annotated,
+		input.output,
+		identify,
+	)
+	return { ...(envelope(annotated) as Record<string, unknown>), ...files }
 }
 
-export async function transcribeRun(app: AppConfig, input: HearInput): Promise<RunRecord> {
-  const vendor = input.model ?? "fun";
-  const model = vendor === "mimo" ? MODEL_MIMO_ASR : resolveModel(vendor);
-  if (!model) throw voxError("invalid_usage", `unknown model vendor "${vendor}"`);
+export async function transcribeRun(
+	app: AppConfig,
+	input: HearInput,
+): Promise<RunRecord> {
+	const vendor = input.model ?? 'fun'
+	const model = vendor === 'mimo' ? MODEL_MIMO_ASR : resolveModel(vendor)
+	if (!model)
+		throw voxError('invalid_usage', `unknown model vendor "${vendor}"`)
 
-  const { data, format, source } = await readAudio(input.file);
-  const durationSec = await durationSeconds(source, data);
-  checkLimits(data.byteLength, durationSec);
-  if (vendor === "mimo") validateMimoRequest(data, format, input);
-  if (input.speakers && durationSec > DIARIZATION_MAX_SECONDS) {
-    console.error(
-      `diarization past ${DIARIZATION_MAX_SECONDS / 3600}h may time out rather than degrade`,
-    );
-  }
+	const { data, format, source } = await readAudio(input.file)
+	const durationSec = await durationSeconds(source, data)
+	checkLimits(data.byteLength, durationSec)
+	if (vendor === 'mimo') validateMimoRequest(data, format, input)
+	if (input.speakers && durationSec > DIARIZATION_MAX_SECONDS) {
+		console.error(
+			`diarization past ${DIARIZATION_MAX_SECONDS / 3600}h may time out rather than degrade`,
+		)
+	}
 
-  const langs = normalizeLangs(input.lang);
-  const args: Args = { model, format, lang: langs.length > 0 ? langs : undefined };
-  if (input.speakers) args.speakers = true;
+	const langs = normalizeLangs(input.lang)
+	const args: Args = {
+		model,
+		format,
+		lang: langs.length > 0 ? langs : undefined,
+	}
+	if (input.speakers) args.speakers = true
 
-  let vocabularyName = "";
-  let loadedVocab: Awaited<ReturnType<typeof loadVocabulary>> | undefined;
-  if (input.vocab) {
-    loadedVocab = await loadVocabulary(app.dir, input.vocab);
-    const resolved = resolveWords(loadedVocab, model);
-    for (const warning of resolved.warnings) console.error(warning);
-    args.vocab = contentHash(resolved.words);
-    vocabularyName = input.vocab;
-  }
+	let vocabularyName = ''
+	let loadedVocab: Awaited<ReturnType<typeof loadVocabulary>> | undefined
+	if (input.vocab) {
+		loadedVocab = await loadVocabulary(app.dir, input.vocab)
+		const resolved = resolveWords(loadedVocab, model)
+		for (const warning of resolved.warnings) console.error(warning)
+		args.vocab = contentHash(resolved.words)
+		vocabularyName = input.vocab
+	}
 
-  const store = newStore(app.dir);
-  const digest = digestOf(data, args);
-  const sid = sidOf(digest);
+	const store = newStore(app.dir)
+	const digest = digestOf(data, args)
+	const sid = sidOf(digest)
 
-  if (!input.refresh) {
-    try {
-      const rec = await loadRun(store, sid, digest);
-      console.error("stored");
-      return rec;
-    } catch {
-      // miss, digest collision, or corrupt — fall through to recognize
-    }
-  }
-  if (durationSec === 0) {
-    console.error("duration unknown; the service will report it");
-  }
+	if (!input.refresh) {
+		try {
+			const rec = await loadRun(store, sid, digest)
+			console.error('stored')
+			return rec
+		} catch {
+			// miss, digest collision, or corrupt — fall through to recognize
+		}
+	}
+	if (durationSec === 0) {
+		console.error('duration unknown; the service will report it')
+	}
 
-  // Stored runs replay offline; only a real recognition needs the provider key.
-  const apiKey = await requireKey(vendor === "mimo" ? "mimo" : "dashscope", input.apiKey);
-  const client = vendor === "mimo" ? undefined : new DashScopeClient(apiKey);
-  let vocabularyId = "";
-  if (loadedVocab && args.vocab) {
-    const result = await syncVocabulary(client!, app.dir, loadedVocab, model, false);
-    for (const warning of result.warnings) console.error(`${loadedVocab.name}: ${warning}`);
-    if (result.action !== "reused") console.error(`vocab ${input.vocab} ${result.action}`);
-    vocabularyId = result.vocabularyId;
-  }
+	// Stored runs replay offline; only a real recognition needs the provider key.
+	const apiKey = await requireKey(
+		vendor === 'mimo' ? 'mimo' : 'dashscope',
+		input.apiKey,
+	)
+	const client = vendor === 'mimo' ? undefined : new DashScopeClient(apiKey)
+	let vocabularyId = ''
+	if (loadedVocab && args.vocab) {
+		const result = await syncVocabulary(
+			client!,
+			app.dir,
+			loadedVocab,
+			model,
+			false,
+		)
+		for (const warning of result.warnings)
+			console.error(`${loadedVocab.name}: ${warning}`)
+		if (result.action !== 'reused')
+			console.error(`vocab ${input.vocab} ${result.action}`)
+		vocabularyId = result.vocabularyId
+	}
 
-  const t0 = Date.now();
-  console.error(`model ${model}${durationSec ? ` ${formatSeconds(durationSec)}` : ""}`);
-  let result;
-  try {
-    result =
-      vendor === "mimo"
-        ? await new MimoClient(apiKey).transcribe(data, format, args.lang)
-        : await client!.transcribeFile(
-            source.split("/").pop() ?? "audio",
-            data,
-            {
-              model,
-              vocabularyId: vocabularyId || undefined,
-              languageHints: args.lang,
-              diarization: args.speakers,
-            },
-            taskProgress(),
-          );
-  } catch (error) {
-    throw voxError("api_error", error instanceof Error ? error.message : String(error));
-  }
-  console.error(`latency ${formatMs(Date.now() - t0)}`);
+	const t0 = Date.now()
+	console.error(
+		`model ${model}${durationSec ? ` ${formatSeconds(durationSec)}` : ''}`,
+	)
+	let result
+	try {
+		result =
+			vendor === 'mimo'
+				? await new MimoClient(apiKey).transcribe(data, format, args.lang)
+				: await client!.transcribeFile(
+						source.split('/').pop() ?? 'audio',
+						data,
+						{
+							model,
+							vocabularyId: vocabularyId || undefined,
+							languageHints: args.lang,
+							diarization: args.speakers,
+						},
+						taskProgress(),
+					)
+	} catch (error) {
+		throw voxError(
+			'api_error',
+			error instanceof Error ? error.message : String(error),
+		)
+	}
+	console.error(`latency ${formatMs(Date.now() - t0)}`)
 
-  const measuredDuration = durationSec || result.duration_sec || 0;
-  const rec: RunRecord = {
-    digest,
-    meta: {
-      sid,
-      source: tilde(source),
-      model,
-      vocab: vocabularyName && args.vocab ? `${vocabularyName}@${args.vocab}` : undefined,
-      lang: args.lang,
-      created: new Date().toISOString(),
-      path: tilde(runDir(store, sid)),
-      size: measure(result, measuredDuration),
-    },
-    args,
-    result,
-  };
-  try {
-    await saveRun(store, rec, data, format);
-  } catch (error) {
-    throw voxError(
-      "io_error",
-      `cannot save run: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  return rec;
+	const measuredDuration = durationSec || result.duration_sec || 0
+	const rec: RunRecord = {
+		digest,
+		meta: {
+			sid,
+			source: tilde(source),
+			model,
+			vocab:
+				vocabularyName && args.vocab
+					? `${vocabularyName}@${args.vocab}`
+					: undefined,
+			lang: args.lang,
+			created: new Date().toISOString(),
+			path: tilde(runDir(store, sid)),
+			size: measure(result, measuredDuration),
+		},
+		args,
+		result,
+	}
+	try {
+		await saveRun(store, rec, data, format)
+	} catch (error) {
+		throw voxError(
+			'io_error',
+			`cannot save run: ${error instanceof Error ? error.message : String(error)}`,
+		)
+	}
+	return rec
 }
 
-function validateMimoRequest(data: Uint8Array, format: string, input: HearInput): void {
-  if (input.speakers) {
-    throw voxError(
-      "invalid_usage",
-      "MiMo does not return speaker labels",
-      "remove --speakers or use --model qwen",
-    );
-  }
-  if (input.vocab) {
-    throw voxError(
-      "invalid_usage",
-      "MiMo does not support Vox vocabularies",
-      "remove --vocab or use --model qwen",
-    );
-  }
-  try {
-    mimoLanguage(input.lang);
-    mimoAudioData(data, format);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    const code = detail.includes("10 MB") ? "audio_too_large" : "audio_unsupported";
-    throw voxError(code, detail);
-  }
+function validateMimoRequest(
+	data: Uint8Array,
+	format: string,
+	input: HearInput,
+): void {
+	if (input.speakers) {
+		throw voxError(
+			'invalid_usage',
+			'MiMo does not return speaker labels',
+			'remove --speakers or use --model qwen',
+		)
+	}
+	if (input.vocab) {
+		throw voxError(
+			'invalid_usage',
+			'MiMo does not support Vox vocabularies',
+			'remove --vocab or use --model qwen',
+		)
+	}
+	try {
+		mimoLanguage(input.lang)
+		mimoAudioData(data, format)
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error)
+		const code = detail.includes('10 MB')
+			? 'audio_too_large'
+			: 'audio_unsupported'
+		throw voxError(code, detail)
+	}
 }
 
 export function envelope(rec: RunRecord): unknown {
-  if (rec.meta.size.tokens <= FOLD_TOKENS) {
-    return { ...rec.meta, text: rec.result.text };
-  }
-  return {
-    $hints: [
-      `Transcript folded at ${FOLD_TOKENS} tokens. Read it with \`vox export --sid ${rec.meta.sid} --format md\`.`,
-    ],
-    ...rec.meta,
-    preview: preview(rec.result.text, PREVIEW_RUNES),
-  };
+	if (rec.meta.size.tokens <= FOLD_TOKENS) {
+		return { ...rec.meta, text: rec.result.text }
+	}
+	return {
+		$hints: [
+			`Transcript folded at ${FOLD_TOKENS} tokens. Read it with \`vox export --sid ${rec.meta.sid} --format md\`.`,
+		],
+		...rec.meta,
+		preview: preview(rec.result.text, PREVIEW_RUNES),
+	}
 }
 
 async function readAudio(
-  file: string,
+	file: string,
 ): Promise<{ data: Uint8Array; format: string; source: string }> {
-  const source = resolve(expandHome(file));
-  let data: Uint8Array;
-  try {
-    data = new Uint8Array(await Bun.file(source).arrayBuffer());
-  } catch (error) {
-    throw voxError(
-      "audio_unsupported",
-      `cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-  const format = extname(source).slice(1).toLowerCase();
-  if (!isSupportedFormat(format)) {
-    const label = format ? `.${format}` : `${source.split("/").pop()} (no extension)`;
-    throw voxError(
-      "audio_unsupported",
-      `${label} is not a supported audio format`,
-      `supported: ${supportedFormats().join(", ")}`,
-    );
-  }
-  return { data, format, source };
+	const source = resolve(expandHome(file))
+	let data: Uint8Array
+	try {
+		data = new Uint8Array(await Bun.file(source).arrayBuffer())
+	} catch (error) {
+		throw voxError(
+			'audio_unsupported',
+			`cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
+		)
+	}
+	const format = extname(source).slice(1).toLowerCase()
+	if (!isSupportedFormat(format)) {
+		const label = format
+			? `.${format}`
+			: `${source.split('/').pop()} (no extension)`
+		throw voxError(
+			'audio_unsupported',
+			`${label} is not a supported audio format`,
+			`supported: ${supportedFormats().join(', ')}`,
+		)
+	}
+	return { data, format, source }
 }
 
 export function normalizeLangs(value: string[] | undefined): string[] {
-  return (value ?? []).map((item) => item.trim()).filter(Boolean);
+	return (value ?? []).map((item) => item.trim()).filter(Boolean)
 }
 
 function checkLimits(bytes: number, durationSec: number): void {
-  if (bytes > MAX_FILE_BYTES) {
-    throw voxError(
-      "audio_too_large",
-      `audio is ${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB, over the ${MAX_FILE_BYTES / (1024 * 1024 * 1024)}GB limit`,
-      "re-encode it, or split it",
-    );
-  }
-  if (durationSec > MAX_FILE_SECONDS) {
-    throw voxError(
-      "audio_too_large",
-      `audio is ${formatSeconds(durationSec)}, over the ${MAX_FILE_SECONDS / 3600}h limit`,
-      `split the file into parts under ${MAX_FILE_SECONDS / 3600} hours`,
-    );
-  }
+	if (bytes > MAX_FILE_BYTES) {
+		throw voxError(
+			'audio_too_large',
+			`audio is ${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB, over the ${MAX_FILE_BYTES / (1024 * 1024 * 1024)}GB limit`,
+			're-encode it, or split it',
+		)
+	}
+	if (durationSec > MAX_FILE_SECONDS) {
+		throw voxError(
+			'audio_too_large',
+			`audio is ${formatSeconds(durationSec)}, over the ${MAX_FILE_SECONDS / 3600}h limit`,
+			`split the file into parts under ${MAX_FILE_SECONDS / 3600} hours`,
+		)
+	}
 }
 
 function taskProgress(): (status: string, elapsedMs: number) => void {
-  let last = "";
-  return (status, elapsedMs) => {
-    if (status === last) return;
-    last = status;
-    console.error(`task ${status.toLowerCase()} ${formatMs(elapsedMs)}`);
-  };
+	let last = ''
+	return (status, elapsedMs) => {
+		if (status === last) return
+		last = status
+		console.error(`task ${status.toLowerCase()} ${formatMs(elapsedMs)}`)
+	}
 }
 
 export function formatSeconds(sec: number): string {
-  if (sec === 0) return "";
-  if (sec >= 3600) return `${Math.floor(sec / 3600)}h${pad2(Math.floor((sec % 3600) / 60))}m`;
-  if (sec >= 60) return `${Math.floor(sec / 60)}m${pad2(sec % 60)}s`;
-  return `${sec}s`;
+	if (sec === 0) return ''
+	if (sec >= 3600)
+		return `${Math.floor(sec / 3600)}h${pad2(Math.floor((sec % 3600) / 60))}m`
+	if (sec >= 60) return `${Math.floor(sec / 60)}m${pad2(sec % 60)}s`
+	return `${sec}s`
 }
 
 function formatMs(ms: number): string {
-  const sec = Math.round(ms / 1000);
-  if (sec < 1) return `${ms}ms`;
-  return formatSeconds(sec) || "0s";
+	const sec = Math.round(ms / 1000)
+	if (sec < 1) return `${ms}ms`
+	return formatSeconds(sec) || '0s'
 }
 
 function pad2(n: number): string {
-  return String(n).padStart(2, "0");
+	return String(n).padStart(2, '0')
 }

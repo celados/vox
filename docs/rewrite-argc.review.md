@@ -135,7 +135,7 @@ prefixes, matched in every non-U+2028 case. The repo's own anchor constant
    (including omitempty `lang` and HTML escapes, table above); resolve order
    matches Go's `sort.Strings` via byte-wise `sortUtf8`
    (`src/go-json.ts:15-19`). Index layout (`name → model → {vocabulary_id,
-content_hash, synced_at}`) is unchanged and Go-written `synced_at`
+   content_hash, synced_at}`) is unchanged and Go-written `synced_at`
    timestamps parse fine. The compatibility break is M1: shape-corrupt
    indexes load instead of failing.
 4. **Export stdout.** Yes: without `output` the handler returns the rendered
