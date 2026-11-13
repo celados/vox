@@ -85,10 +85,7 @@ export const handlers: AppHandlers = {
 		return await say(app, options.input)
 	},
 	voice: {
-		list: async (options) => {
-			const app = await loadConfig()
-			return await listVoices(app, options.input.apiKey)
-		},
+		list: async (options) => await listVoices(options.input.apiKey),
 		record: async (options) => {
 			const app = await loadConfig()
 			return await recordVoice(app, options.input)

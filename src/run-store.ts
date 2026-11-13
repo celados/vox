@@ -15,9 +15,9 @@ import { parse, stringify } from 'yaml'
 import { voxError } from './cli-error.ts'
 import { asrWords, type AsrResult } from './dashscope.ts'
 import { goJSON } from './go-json.ts'
-import { expandHome, tilde } from './paths.ts'
+import { expandHome } from './paths.ts'
 
-export const SID_LENGTH = 12
+const SID_LENGTH = 12
 const SID_PATTERN = new RegExp(`^[0-9a-f]{1,${SID_LENGTH}}$`)
 
 export type Args = {
@@ -214,7 +214,7 @@ export async function removeAllRuns(store: Store): Promise<void> {
 	await rm(store.dir, { recursive: true, force: true })
 }
 
-export function sameSource(recorded: string, filter: string): boolean {
+function sameSource(recorded: string, filter: string): boolean {
 	if (recorded === filter) return true
 	try {
 		return resolve(expandHome(recorded)) === resolve(expandHome(filter))
@@ -222,8 +222,6 @@ export function sameSource(recorded: string, filter: string): boolean {
 		return false
 	}
 }
-
-export { tilde }
 
 export function measure(result: AsrResult, durationSec: number): Size {
 	let cjk = 0

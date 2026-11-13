@@ -1,7 +1,7 @@
 import { MODEL_FLASH_REALTIME } from './dashscope.ts'
 
 const WS_ENDPOINT = 'wss://dashscope.aliyuncs.com/api-ws/v1/realtime'
-export const STREAM_TIMEOUT_MS = 2 * 60 * 1000
+const STREAM_TIMEOUT_MS = 2 * 60 * 1000
 
 export type TtsOptions = {
 	model: string

@@ -117,10 +117,7 @@ export async function say(app: AppConfig, input: SayInput): Promise<unknown> {
 	return out
 }
 
-export async function listVoices(
-	app: AppConfig,
-	given: string | undefined,
-): Promise<unknown> {
+export async function listVoices(given: string | undefined): Promise<unknown> {
 	const system = SYSTEM_VOICES.map((voice) => ({
 		id: voice.id,
 		gender: voice.gender,
@@ -295,7 +292,7 @@ export async function cacheClear(app: AppConfig): Promise<unknown> {
 	return { cleared: count }
 }
 
-export function extractNameFromVoiceId(id: string): string {
+function extractNameFromVoiceId(id: string): string {
 	const prefix = 'qwen-tts-vc-'
 	const marker = '-voice-'
 	if (!id.startsWith(prefix)) return id

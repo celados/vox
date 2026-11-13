@@ -1,6 +1,6 @@
 import type { AsrResult } from './dashscope.ts'
 
-export const MIMO_ENDPOINT = 'https://api.xiaomimimo.com/v1'
+const MIMO_ENDPOINT = 'https://api.xiaomimimo.com/v1'
 export const MODEL_MIMO_ASR = 'mimo-v2.5-asr'
 export const MIMO_MAX_BASE64_BYTES = 10_000_000
 

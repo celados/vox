@@ -90,10 +90,10 @@ export async function embedAudio(
 			},
 		},
 	)
-	proc.stdin.write(
+	await proc.stdin.write(
 		JSON.stringify({ home, audio: resolve(expandHome(audio)), segments }),
 	)
-	proc.stdin.end()
+	await proc.stdin.end()
 	const [stdout, status] = await Promise.all([
 		new Response(proc.stdout).text(),
 		proc.exited,

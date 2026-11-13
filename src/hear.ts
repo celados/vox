@@ -46,8 +46,8 @@ import {
 	syncVocabulary,
 } from './vocab.ts'
 
-export const FOLD_TOKENS = 2000
-export const PREVIEW_RUNES = 60
+const FOLD_TOKENS = 2000
+const PREVIEW_RUNES = 60
 
 export type HearInput = {
 	apiKey?: string
@@ -105,7 +105,7 @@ export async function hear(app: AppConfig, input: HearInput): Promise<unknown> {
 	return { ...(envelope(annotated) as Record<string, unknown>), ...files }
 }
 
-export async function transcribeRun(
+async function transcribeRun(
 	app: AppConfig,
 	input: HearInput,
 ): Promise<RunRecord> {
@@ -270,7 +270,7 @@ function validateMimoRequest(
 	}
 }
 
-export function envelope(rec: RunRecord): unknown {
+function envelope(rec: RunRecord): unknown {
 	if (rec.meta.size.tokens <= FOLD_TOKENS) {
 		return { ...rec.meta, text: rec.result.text }
 	}
@@ -310,7 +310,7 @@ async function readAudio(
 	return { data, format, source }
 }
 
-export function normalizeLangs(value: string[] | undefined): string[] {
+function normalizeLangs(value: string[] | undefined): string[] {
 	return (value ?? []).map((item) => item.trim()).filter(Boolean)
 }
 
@@ -340,7 +340,7 @@ function taskProgress(): (status: string, elapsedMs: number) => void {
 	}
 }
 
-export function formatSeconds(sec: number): string {
+function formatSeconds(sec: number): string {
 	if (sec === 0) return ''
 	if (sec >= 3600)
 		return `${Math.floor(sec / 3600)}h${pad2(Math.floor((sec % 3600) / 60))}m`

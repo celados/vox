@@ -4,9 +4,9 @@ import type { AsrWord, Sentence } from './dashscope.ts'
 import type { RunRecord } from './run-store.ts'
 
 export const MAX_CUE_RUNES = 28
-export const MAX_CUE_DURATION_MS = 6_000
-export const GAP_SPLIT_MS = 400
-export const MIN_WORD_MS = 40
+const MAX_CUE_DURATION_MS = 6_000
+const GAP_SPLIT_MS = 400
+const MIN_WORD_MS = 40
 
 const TERMINATORS = '。！？!?…'
 const SEPARATORS = '，、；：,;:'
@@ -107,7 +107,7 @@ export function render(rec: RunRecord, format: string): string {
 	}
 }
 
-export function cuesOf(rec: RunRecord): Cue[] {
+function cuesOf(rec: RunRecord): Cue[] {
 	if (rec.result.sentences && rec.result.sentences.length > 0) {
 		return fromSentences(rec.result.sentences)
 	}
@@ -211,7 +211,7 @@ function speakerPrefix(sentence: Sentence): string {
 	return label ? `[${label}] ` : ''
 }
 
-export function renderSrt(cues: Cue[]): string {
+function renderSrt(cues: Cue[]): string {
 	let out = ''
 	for (const cue of cues) {
 		out += `${cue.index}\n${srtTime(cue.beginMs)} --> ${srtTime(cue.endMs)}\n${cue.text}\n\n`

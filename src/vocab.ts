@@ -14,10 +14,10 @@ import {
 import { goJSON, sortUtf8 } from './go-json.ts'
 import { tilde } from './paths.ts'
 
-export const DEFAULT_WEIGHT = 4
+const DEFAULT_WEIGHT = 4
 export const SUPER_WEIGHT = 50
-export const MAX_WORDS = 2000
-export const MAX_SUPER_WORDS = 50
+const MAX_WORDS = 2000
+const MAX_SUPER_WORDS = 50
 const DEPLOY_TIMEOUT_MS = 30_000
 
 const ROOT_KEYS = new Set(['lang', 'default_weight', 'words', 'models'])
@@ -205,11 +205,11 @@ export function prefixFor(name: string): string {
 	return prefix
 }
 
-export function validWeight(weight: number): boolean {
+function validWeight(weight: number): boolean {
 	return (weight >= 1 && weight <= 5) || weight === SUPER_WEIGHT
 }
 
-export function validLength(word: string): boolean {
+function validLength(word: string): boolean {
 	const runes = [...word]
 	if (
 		runes.length === 0 ||
@@ -228,7 +228,7 @@ function langFor(model: string, lang: string): string {
 	return lang
 }
 
-export function parseVocabYaml(text: string, name: string): VocabFile {
+function parseVocabYaml(text: string, name: string): VocabFile {
 	const raw = parse(text) as unknown
 	if (raw === null || raw === undefined) return { words: {} }
 	if (typeof raw !== 'object' || Array.isArray(raw)) {
@@ -348,7 +348,7 @@ function indexCorrupt(path: string, error: unknown): never {
 }
 
 /** Fail closed: a JSON array/string/number must not look like an empty index. */
-export function asIndex(value: unknown): Index | undefined {
+function asIndex(value: unknown): Index | undefined {
 	if (!isPlainObject(value)) return undefined
 	const out: Index = {}
 	for (const [name, models] of Object.entries(value)) {
@@ -394,7 +394,7 @@ async function writeIndex(voxDir: string, idx: Index): Promise<void> {
 	}
 }
 
-export async function saveIndex(voxDir: string, idx: Index): Promise<void> {
+async function saveIndex(voxDir: string, idx: Index): Promise<void> {
 	const dir = vocabDir(voxDir)
 	await mkdir(dir, { recursive: true })
 	const tmp = join(dir, `.index-${process.pid}-${Date.now()}.json`)
@@ -402,7 +402,7 @@ export async function saveIndex(voxDir: string, idx: Index): Promise<void> {
 	await rename(tmp, indexPath(voxDir))
 }
 
-export function indexGet(
+function indexGet(
 	idx: Index,
 	name: string,
 	model: string,
@@ -410,7 +410,7 @@ export function indexGet(
 	return idx[name]?.[model]
 }
 
-export function indexSet(
+function indexSet(
 	idx: Index,
 	name: string,
 	model: string,

@@ -4,8 +4,8 @@ import { join } from 'node:path'
 
 import { voxError } from './cli-error.ts'
 
-export const SAMPLE_RATE = 24_000
-export const CHANNEL_COUNT = 1
+const SAMPLE_RATE = 24_000
+const CHANNEL_COUNT = 1
 
 const SUPPORTED_FORMATS = new Set([
 	'wav',

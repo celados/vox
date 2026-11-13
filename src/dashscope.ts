@@ -2,14 +2,14 @@ import { basename } from 'node:path'
 
 import type { Identification } from './speakers.ts'
 
-export const HTTP_ENDPOINT = 'https://dashscope.aliyuncs.com/api/v1'
+const HTTP_ENDPOINT = 'https://dashscope.aliyuncs.com/api/v1'
 export const MODEL_FUN_ASR = 'fun-asr'
 export const MODEL_QWEN_AUDIO_FILE = 'qwen-audio-3.1-asr-flash-filetrans'
 export const MODEL_FLASH_REALTIME = 'qwen3-tts-flash-realtime'
 export const MODEL_INSTRUCT_REALTIME = 'qwen3-tts-instruct-flash-realtime'
-export const MODEL_VC_REALTIME = 'qwen3-tts-vc-realtime-2026-01-15'
-export const MODEL_ENROLLMENT = 'qwen-voice-enrollment'
-export const BIASING_MODEL = 'speech-biasing'
+const MODEL_VC_REALTIME = 'qwen3-tts-vc-realtime-2026-01-15'
+const MODEL_ENROLLMENT = 'qwen-voice-enrollment'
+const BIASING_MODEL = 'speech-biasing'
 
 export const MAX_FILE_SECONDS = 12 * 60 * 60
 export const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024
@@ -23,12 +23,12 @@ const ENROLLMENT_PATH = '/services/audio/tts/customization'
 const UPLOADS_PATH = '/uploads'
 const POLL_INTERVAL_MS = 5_000
 
-export const VENDORS = {
+const VENDORS = {
 	fun: MODEL_FUN_ASR,
 	qwen: MODEL_QWEN_AUDIO_FILE,
 } as const
 
-export type Vendor = keyof typeof VENDORS
+type Vendor = keyof typeof VENDORS
 
 export function resolveModel(vendor: string): string | undefined {
 	if (vendor in VENDORS) return VENDORS[vendor as Vendor]

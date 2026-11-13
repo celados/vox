@@ -45,7 +45,7 @@ export function voxError(
  * argc renders unrecognized throws as RUNTIME_ERROR and buries the domain code
  * in prose. Convert at the handler boundary so agents can match `code`.
  */
-export function toDomainError(error: unknown): unknown {
+function toDomainError(error: unknown): unknown {
 	if (!(error instanceof VoxError)) return error
 	return domainError(
 		error.code,
