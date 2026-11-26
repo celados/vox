@@ -16,7 +16,7 @@ words:
   赛德克巴莱:
 ```
 
-Selector: `vox @schema .vocab`.
+Selector: `vox @schema 'vocab.*'`.
 
 - Account cap: 10 lists shared across models. One vocabulary used with both models consumes two slots.
 - Non-ASCII words are at most 15 characters. Weight is 1–5; 50 is a super hotword that only `qwen` honours.

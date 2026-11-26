@@ -30,7 +30,7 @@ Enrollment uses 3–30 seconds of clean solo speech. Model weights and the isola
 Python helper download on first use into `~/.vox`; matching runs on local MLX,
 while Alibaba handles transcription and anonymous speaker separation. Uncertain
 identities stay anonymous. `speaker.identify` reprocesses a stored run after
-profile changes without repeating ASR. See `vox @skill` and `vox @schema .speaker`
+profile changes without repeating ASR. See `vox @skill` and `vox @schema 'speaker.*'`
 for the complete contract.
 
 ## Install

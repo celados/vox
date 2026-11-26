@@ -61,7 +61,7 @@ test('@schema exposes the dotted command surface', async () => {
 	}
 	// Legacy cache ops are hidden from the overview but still addressable by path.
 	expect(stdout).not.toContain('### cache')
-	expect((await run(['@schema', '.cache'])).stdout).toContain(
+	expect((await run(['@schema', 'cache.*'])).stdout).toContain(
 		'### cache.clear\n',
 	)
 	expect(stdout).not.toContain('### dashscope')
@@ -187,7 +187,7 @@ test('session.remove rejects path traversal before touching the filesystem', asy
 
 test('speaker command schemas preserve enrollment, matching settings, and identity fields', async () => {
 	const home = await mkdtemp(join(tmpdir(), 'vox-speaker-cli-'))
-	const schema = await run(['@schema', '.speaker'], home)
+	const schema = await run(['@schema', 'speaker.*'], home)
 	expect(schema.exitCode, schema.stderr).toBe(0)
 	expect(schema.stdout).toContain('### speaker.enroll\n')
 	expect(schema.stdout).toMatch(

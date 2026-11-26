@@ -7,7 +7,7 @@ generated: { by: codex, at: 2026-10-16 }
 
 # Contract and architecture
 
-Usage: `vox @skill`. Typed contract: `vox @schema .speaker` and [src/schema.ts](../src/schema.ts).
+Usage: `vox @skill`. Typed contract: `vox @schema 'speaker.*'` and [src/schema.ts](../src/schema.ts).
 
 Bun owns the CLI, speaker profile store, candidate selection, matching policy,
 ASR cache, and transcript rendering. The embedded Python helper owns audio

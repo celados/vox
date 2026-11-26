@@ -31,7 +31,7 @@ Four invariants the whole surface is built on:
 ## Schema
 
 The authoritative types and descriptions are [src/schema.ts](../src/schema.ts).
-Use `vox @schema`, or `vox @schema .speaker` for local identity commands.
+Use `vox @schema`, or `vox @schema 'speaker.*'` for local identity commands.
 The embedded usage guide is [src/index.md](../src/index.md), served by `vox @skill`.
 
 ## Recognition

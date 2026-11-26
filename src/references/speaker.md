@@ -8,7 +8,7 @@ description: Enrollment, matching semantics and storage for vox speaker.* and he
 
 Prerequisites: `uv` and `ffmpeg` on PATH (`brew install uv ffmpeg`). ASR still uses DashScope; voice matching runs locally. The first enrollment or identity request lazily downloads the pinned model (~26 MB) and Python runtime dependencies. Weights live in `~/.vox/models/`, runtime files in `~/.vox/runtime/`, caches in `~/.vox/cache/uv` and `~/.vox/models/huggingface`. No PyTorch needed.
 
-Selectors: `vox @schema '.{speaker,hear}'`.
+Selectors: `vox @schema '{speaker.*,hear}'`.
 
 ## Enrolling
 
