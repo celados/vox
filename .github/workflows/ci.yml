@@ -17,12 +17,14 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # celados ARC pool; public fork PR code stays on GitHub-hosted runners.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'celados-linux' }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
-          bun-version: latest
+          bun-version: 1.4.5
       - name: Configure Celados npm registry
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
