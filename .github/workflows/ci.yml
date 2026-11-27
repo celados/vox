@@ -20,17 +20,14 @@ jobs:
     # celados ARC pool; public fork PR code stays on GitHub-hosted runners.
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || 'celados-linux' }}
     timeout-minutes: 20
+    env:
+      CELADOS_NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-bun
         with:
           bun-version: 1.4.5
-      - name: Configure Celados npm registry
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          printf '%s\n' '@celados:registry=https://npm.celados.com' > .npmrc
-          printf '%s\n' "//npm.celados.com/:_authToken=${NODE_AUTH_TOKEN}" >> .npmrc
+      - uses: celados/.github/actions/setup-celados-npm@setup-celados-npm-v1
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: bun run build
